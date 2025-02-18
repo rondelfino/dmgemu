@@ -1,0 +1,7 @@
+﻿---
+BasedOnStyle: Microsoft
+BreakBeforeBraces: Allman
+BinPackParameters: false
+IndentWidth: 4
+
+...
