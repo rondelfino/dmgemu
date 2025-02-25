@@ -21,5 +21,5 @@ set warnings=%warnings% -Wno-writable-strings
 
 
 pushd build
-clang-cl %cflags% %warnings% %debug% ..\main.cpp ..\sm83.cpp ..\instructions.cpp ..\mmu.cpp
+clang-cl %cflags% %warnings% %debug% ..\src\main.cpp ..\src\sm83.cpp ..\src\instructions.cpp ..\src\memory.cpp ..\src\idu.cpp ..\src\gb.cpp
 popd

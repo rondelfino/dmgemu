@@ -1,13 +1,16 @@
 #include "sm83.h"
 
-void log_cpu_state(SM83 *cpu)
+static u8 sm83_read(Memory *memory, u16 address);
+static void sm83_write(Memory *memory, u16 address, u8 value);
+
+static void log_cpu_state(SM83 *cpu)
 {
     char buffer[256];
     sprintf(buffer,
             "A:%02X F:%02X B:%02X C:%02X D:%02X E:%02X H:%02X L:%02X SP:%04X PC:%04X PCMEM:%02X,%02X,%02X,%02X\n",
             cpu->reg.a, cpu->reg.f, cpu->reg.b, cpu->reg.c, cpu->reg.d, cpu->reg.e, cpu->reg.h, cpu->reg.l, cpu->reg.sp,
-            cpu->reg.pc, cpu->memory->memory_map[cpu->reg.pc], cpu->memory->memory_map[cpu->reg.pc + 1],
-            cpu->memory->memory_map[cpu->reg.pc + 2], cpu->memory->memory_map[cpu->reg.pc + 3]);
+            cpu->reg.pc, sm83_read(cpu->memory, cpu->reg.pc), sm83_read(cpu->memory, cpu->reg.pc + 1),
+            sm83_read(cpu->memory, cpu->reg.pc + 2), sm83_read(cpu->memory, cpu->reg.pc + 3));
 
     FILE *log = fopen("cpu_log.txt", "a");
     if (!log)
@@ -21,18 +24,6 @@ void log_cpu_state(SM83 *cpu)
 void sm83_reset(SM83 *cpu)
 {
     *cpu = {};
-}
-// TODO: Instructions increment pc
-void fetch(SM83 *cpu)
-{
-    cpu->instructions = instructions;
-
-    cpu->instructions[cpu->reg.ir].microop_index = 0;
-    cpu->reg.ir = mmu_read_byte(cpu->memory, cpu->reg.pc, false);
-
-    log_cpu_state(cpu);
-
-    idu_increment(&cpu->reg.pc);
 }
 
 static u8 rotate_left(SM83 *cpu, u8 value)
@@ -139,16 +130,51 @@ static u8 swap(SM83 *cpu, u8 value)
     return value;
 }
 
-// u8 cpu_read(SM83 *cpu, u16 address)
-// {
-//     mmu_read_byte(cpu->memory, address, false);
-//     cpu->io.state = cpu->io.Read;
-// }
+static u8 sm83_read(Memory *memory, u16 address)
+{
+    memory->cpu_bus.active = true;
+    memory->cpu_bus.address = address;
 
-// u8 cpu_write(SM83 *cpu, u8 value)
-// {
-//     cpu->io.state = cpu->io.Write;
-// }
+    u8 data = gb_read_memory(memory, address);
+    memory->cpu_bus.data = data;
+    memory->cpu_bus.previous_data = memory->cpu_bus.data;
+
+    return data;
+}
+
+static void sm83_write(Memory *memory, u16 address, u8 value)
+{
+    memory->cpu_bus.active = true;
+    memory->cpu_bus.address = address;
+    memory->cpu_bus.data = value;
+
+    gb_write_memory(memory, address, value);
+}
+
+/*********** Cycle ***********/
+static void fetch(SM83 *cpu)
+{
+    cpu->instructions = instructions;
+
+    cpu->instructions[cpu->reg.ir].microop_index = 0;
+    cpu->reg.ir = sm83_read(cpu->memory, cpu->reg.pc);
+
+    log_cpu_state(cpu);
+
+    idu_increment(&cpu->reg.pc);
+}
+
+static void sm83_tick(SM83 *cpu)
+{
+    if (!cpu->instructions)
+    {
+        cpu->instructions = instructions;
+    }
+
+    u8 op_index = cpu->instructions[cpu->reg.ir].microop_index;
+    cpu->instructions[cpu->reg.ir].microop_index++;
+    cpu->instructions[cpu->reg.ir].handlers[op_index](cpu, &cpu->instructions[cpu->reg.ir]);
+}
 
 void sm83_tick_t1(SM83 *cpu)
 {
@@ -167,38 +193,7 @@ void sm83_tick_t4(SM83 *cpu)
 {
 }
 
-void sm83_tick(SM83 *cpu)
-{
-    if (!cpu->instructions)
-    {
-        cpu->instructions = instructions;
-    }
-
-    u8 op_index = cpu->instructions[cpu->reg.ir].microop_index;
-    cpu->instructions[cpu->reg.ir].microop_index++;
-    cpu->instructions[cpu->reg.ir].handlers[op_index](cpu, &cpu->instructions[cpu->reg.ir]);
-}
-
-static void increment(u16 *data, s8 value)
-{
-    if (*data >= OAM_START && *data <= 0xFFFF)
-    {
-        // TODO: Handle OAM bug
-    }
-
-    (*data) += value;
-}
-
-void idu_increment(u16 *data)
-{
-    increment(data, 1);
-}
-
-void idu_decrement(u16 *data)
-{
-    increment(data, -1);
-}
-
+/*********** Instructions ***********/
 void unimplemented_instruction(SM83 *cpu, Instruction *instr)
 {
     // TODO: Error handling/logging
@@ -240,16 +235,16 @@ void ld_r_rp(SM83 *cpu, Instruction *instr)
 
 void ld_rr_nn_m1(SM83 *cpu, Instruction *instr)
 {
-    u8 z = mmu_read_byte(cpu->memory, cpu->reg.pc, false);
-    cpu->io.data = z;
-    cpu->lsb = cpu->io.data;
+    u8 z = sm83_read(cpu->memory, cpu->reg.pc);
+    cpu->memory->cpu_bus.data = z;
+    cpu->lsb = cpu->memory->cpu_bus.data;
     idu_increment(&cpu->reg.pc);
 }
 void ld_rr_nn_m2(SM83 *cpu, Instruction *instr)
 {
-    u8 w = mmu_read_byte(cpu->memory, cpu->reg.pc, false);
-    cpu->io.data = w;
-    cpu->msb = cpu->io.data;
+    u8 w = sm83_read(cpu->memory, cpu->reg.pc);
+    cpu->memory->cpu_bus.data = w;
+    cpu->msb = cpu->memory->cpu_bus.data;
     cpu->nn = unsigned_16(cpu->msb, cpu->lsb);
     idu_increment(&cpu->reg.pc);
 }
@@ -262,77 +257,77 @@ void ld_rr_nn_m3(SM83 *cpu, Instruction *instr)
 
 void ld_bc_a(SM83 *cpu, Instruction *instr)
 {
-    mmu_write_byte(cpu->memory, cpu->reg.bc, cpu->reg.a);
+    sm83_write(cpu->memory, cpu->reg.bc, cpu->reg.a);
     fetch(cpu);
 }
 
 void ld_de_a(SM83 *cpu, Instruction *instr)
 {
-    mmu_write_byte(cpu->memory, cpu->reg.de, cpu->reg.a);
+    sm83_write(cpu->memory, cpu->reg.de, cpu->reg.a);
     fetch(cpu);
 }
 
 void ldi_hl_a(SM83 *cpu, Instruction *instr)
 {
-    mmu_write_byte(cpu->memory, cpu->reg.hl, cpu->reg.a);
+    sm83_write(cpu->memory, cpu->reg.hl, cpu->reg.a);
     idu_increment(&cpu->reg.hl);
     fetch(cpu);
 }
 
 void ldd_hl_a(SM83 *cpu, Instruction *instr)
 {
-    mmu_write_byte(cpu->memory, cpu->reg.hl, cpu->reg.a);
+    sm83_write(cpu->memory, cpu->reg.hl, cpu->reg.a);
     idu_decrement(&cpu->reg.hl);
     fetch(cpu);
 }
 
 void ldi_a_hl_m1(SM83 *cpu, Instruction *instr)
 {
-    u8 z = mmu_read_byte(cpu->memory, cpu->reg.hl, false);
-    cpu->io.data = z;
+    u8 z = sm83_read(cpu->memory, cpu->reg.hl);
+    cpu->memory->cpu_bus.data = z;
     idu_increment(&cpu->reg.hl);
 }
 void ldi_a_hl_m2(SM83 *cpu, Instruction *instr)
 {
-    cpu->reg.a = cpu->io.data;
+    cpu->reg.a = cpu->memory->cpu_bus.data;
     fetch(cpu);
 }
 
 void ldd_a_hl_m1(SM83 *cpu, Instruction *instr)
 {
-    u8 z = mmu_read_byte(cpu->memory, cpu->reg.hl, false);
-    cpu->io.data = z;
+    u8 z = sm83_read(cpu->memory, cpu->reg.hl);
+    cpu->memory->cpu_bus.data = z;
     idu_decrement(&cpu->reg.hl);
 }
 void ldd_a_hl_m2(SM83 *cpu, Instruction *instr)
 {
-    cpu->reg.a = cpu->io.data;
+    cpu->reg.a = cpu->memory->cpu_bus.data;
     fetch(cpu);
 }
 
 void ld_nn_sp_m1(SM83 *cpu, Instruction *instr)
 {
-    u8 z = mmu_read_byte(cpu->memory, cpu->reg.pc, false);
-    cpu->io.data = z;
-    cpu->lsb = cpu->io.data;
+    u8 z = sm83_read(cpu->memory, cpu->reg.pc);
+    cpu->memory->cpu_bus.data = z;
+    cpu->lsb = cpu->memory->cpu_bus.data;
     idu_increment(&cpu->reg.pc);
 }
 void ld_nn_sp_m2(SM83 *cpu, Instruction *instr)
 {
-    u8 w = mmu_read_byte(cpu->memory, cpu->reg.pc, false);
-    cpu->io.data = w;
-    cpu->msb = cpu->io.data;
+    u8 w = sm83_read(cpu->memory, cpu->reg.pc);
+    cpu->memory->cpu_bus.data = w;
+    cpu->msb = cpu->memory->cpu_bus.data;
     cpu->address = unsigned_16(cpu->msb, cpu->lsb);
     idu_increment(&cpu->reg.pc);
 }
 void ld_nn_sp_m3(SM83 *cpu, Instruction *instr)
 {
-    mmu_write_byte(cpu->memory, cpu->address, lsb(cpu->reg.sp));
+    sm83_write(cpu->memory, cpu->address, lsb(cpu->reg.sp));
     idu_increment(&cpu->address);
 }
 void ld_nn_sp_m4(SM83 *cpu, Instruction *instr)
 {
-    mmu_write_byte(cpu->memory, cpu->address, msb(cpu->reg.sp));
+    sm83_write(cpu->memory, cpu->address, msb(cpu->reg.sp));
 }
 void ld_nn_sp_m5(SM83 *cpu, Instruction *instr)
 {
@@ -348,26 +343,26 @@ void ld_sp_hl(SM83 *cpu, Instruction *instr)
 // TODO: Test this
 void ld_hl_spe_m1(SM83 *cpu, Instruction *instr)
 {
-    u8 z = mmu_read_byte(cpu->memory, cpu->reg.pc, false);
-    cpu->io.data = z;
+    u8 z = sm83_read(cpu->memory, cpu->reg.pc);
+    cpu->memory->cpu_bus.data = z;
     idu_increment(&cpu->reg.pc);
 }
 void ld_hl_spe_m2(SM83 *cpu, Instruction *instr)
 {
     u8 lsb_sp = lsb(cpu->reg.sp);
 
-    u16 result = lsb_sp + cpu->io.data;
+    u16 result = lsb_sp + cpu->memory->cpu_bus.data;
 
     cpu->reg.flags.z = (result == 0);
     cpu->reg.flags.n = 0;
-    cpu->reg.flags.h = (lsb_sp & 0xF) + (cpu->io.data & 0xF) > 0xF;
+    cpu->reg.flags.h = (lsb_sp & 0xF) + (cpu->memory->cpu_bus.data & 0xF) > 0xF;
     cpu->reg.flags.c = result > 0xFF;
 
     cpu->reg.l = result;
 }
 void ld_hl_spe_m3(SM83 *cpu, Instruction *instr)
 {
-    bool z_sign = get_bit(7, cpu->io.data);
+    bool z_sign = get_bit(7, cpu->memory->cpu_bus.data);
     u8 adj = z_sign ? 0xFF : 0x00;
 
     u16 result = msb(cpu->reg.sp) + adj + cpu->reg.flags.c;
@@ -377,99 +372,99 @@ void ld_hl_spe_m3(SM83 *cpu, Instruction *instr)
 
 void ld_nn_a_m1(SM83 *cpu, Instruction *instr)
 {
-    u8 z = mmu_read_byte(cpu->memory, cpu->reg.pc, false);
-    cpu->io.data = z;
-    cpu->lsb = cpu->io.data;
+    u8 z = sm83_read(cpu->memory, cpu->reg.pc);
+    cpu->memory->cpu_bus.data = z;
+    cpu->lsb = cpu->memory->cpu_bus.data;
     idu_increment(&cpu->reg.pc);
 }
 void ld_nn_a_m2(SM83 *cpu, Instruction *instr)
 {
-    u8 w = mmu_read_byte(cpu->memory, cpu->reg.pc, false);
-    cpu->io.data = w;
-    cpu->msb = cpu->io.data;
+    u8 w = sm83_read(cpu->memory, cpu->reg.pc);
+    cpu->memory->cpu_bus.data = w;
+    cpu->msb = cpu->memory->cpu_bus.data;
     idu_increment(&cpu->reg.pc);
 }
 void ld_nn_a_m3(SM83 *cpu, Instruction *instr)
 {
     cpu->address = unsigned_16(cpu->msb, cpu->lsb);
-    mmu_write_byte(cpu->memory, cpu->address, cpu->reg.a);
+    sm83_write(cpu->memory, cpu->address, cpu->reg.a);
     fetch(cpu);
 }
 
 void ld_a_bc_m1(SM83 *cpu, Instruction *instr)
 {
-    u8 z = mmu_read_byte(cpu->memory, cpu->reg.bc, false);
-    cpu->io.data = z;
+    u8 z = sm83_read(cpu->memory, cpu->reg.bc);
+    cpu->memory->cpu_bus.data = z;
 }
 void ld_a_bc_m2(SM83 *cpu, Instruction *instr)
 {
-    cpu->reg.a = cpu->io.data;
+    cpu->reg.a = cpu->memory->cpu_bus.data;
     fetch(cpu);
 }
 
 void ld_a_de_m1(SM83 *cpu, Instruction *instr)
 {
-    u8 z = mmu_read_byte(cpu->memory, cpu->reg.de, false);
-    cpu->io.data = z;
+    u8 z = sm83_read(cpu->memory, cpu->reg.de);
+    cpu->memory->cpu_bus.data = z;
 }
 void ld_a_de_m2(SM83 *cpu, Instruction *instr)
 {
-    cpu->reg.a = cpu->io.data;
+    cpu->reg.a = cpu->memory->cpu_bus.data;
     fetch(cpu);
 }
 
 void ld_a_nn_m1(SM83 *cpu, Instruction *instr)
 {
-    u8 z = mmu_read_byte(cpu->memory, cpu->reg.pc, false);
-    cpu->io.data = z;
-    cpu->lsb = cpu->io.data;
+    u8 z = sm83_read(cpu->memory, cpu->reg.pc);
+    cpu->memory->cpu_bus.data = z;
+    cpu->lsb = cpu->memory->cpu_bus.data;
     idu_increment(&cpu->reg.pc);
 }
 void ld_a_nn_m2(SM83 *cpu, Instruction *instr)
 {
-    u8 w = mmu_read_byte(cpu->memory, cpu->reg.pc, false);
-    cpu->io.data = w;
-    cpu->msb = cpu->io.data;
+    u8 w = sm83_read(cpu->memory, cpu->reg.pc);
+    cpu->memory->cpu_bus.data = w;
+    cpu->msb = cpu->memory->cpu_bus.data;
     idu_increment(&cpu->reg.pc);
 }
 void ld_a_nn_m3(SM83 *cpu, Instruction *instr)
 {
     cpu->address = unsigned_16(cpu->msb, cpu->lsb);
-    cpu->io.data = mmu_read_byte(cpu->memory, cpu->address, cpu->reg.a);
+    cpu->memory->cpu_bus.data = sm83_read(cpu->memory, cpu->address);
 }
 void ld_a_nn_m4(SM83 *cpu, Instruction *instr)
 {
-    cpu->reg.a = cpu->io.data;
+    cpu->reg.a = cpu->memory->cpu_bus.data;
     fetch(cpu);
 }
 
 void ld_r_n_m1(SM83 *cpu, Instruction *instr)
 {
-    u8 z = mmu_read_byte(cpu->memory, cpu->reg.pc, false);
-    cpu->io.data = z;
+    u8 z = sm83_read(cpu->memory, cpu->reg.pc);
+    cpu->memory->cpu_bus.data = z;
     idu_increment(&cpu->reg.pc);
 }
 void ld_r_n_m2(SM83 *cpu, Instruction *instr)
 {
-    cpu->reg.byte_regs[instr->args[0].reg8] = cpu->io.data;
+    cpu->reg.byte_regs[instr->args[0].reg8] = cpu->memory->cpu_bus.data;
     fetch(cpu);
 }
 
 void ld_r_hl_m1(SM83 *cpu, Instruction *instr)
 {
-    u8 z = mmu_read_byte(cpu->memory, cpu->reg.hl, false);
-    cpu->io.data = z;
+    u8 z = sm83_read(cpu->memory, cpu->reg.hl);
+    cpu->memory->cpu_bus.data = z;
 }
 void ld_r_hl_m2(SM83 *cpu, Instruction *instr)
 {
-    cpu->reg.byte_regs[instr->args[0].reg8] = cpu->io.data;
+    cpu->reg.byte_regs[instr->args[0].reg8] = cpu->memory->cpu_bus.data;
     fetch(cpu);
 }
 
 void ld_hl_r_m1(SM83 *cpu, Instruction *instr)
 {
     u8 data = cpu->reg.byte_regs[instr->args[0].reg8];
-    mmu_write_byte(cpu->memory, cpu->reg.hl, data);
+    sm83_write(cpu->memory, cpu->reg.hl, data);
 }
 void ld_hl_r_m2(SM83 *cpu, Instruction *instr)
 {
@@ -478,13 +473,13 @@ void ld_hl_r_m2(SM83 *cpu, Instruction *instr)
 
 void ld_hl_n_m1(SM83 *cpu, Instruction *instr)
 {
-    u8 z = mmu_read_byte(cpu->memory, cpu->reg.pc, false);
-    cpu->io.data = z;
+    u8 z = sm83_read(cpu->memory, cpu->reg.pc);
+    cpu->memory->cpu_bus.data = z;
     idu_increment(&cpu->reg.pc);
 }
 void ld_hl_n_m2(SM83 *cpu, Instruction *instr)
 {
-    mmu_write_byte(cpu->memory, cpu->reg.hl, cpu->io.data);
+    sm83_write(cpu->memory, cpu->reg.hl, cpu->memory->cpu_bus.data);
 }
 void ld_hl_n_m3(SM83 *cpu, Instruction *instr)
 {
@@ -493,15 +488,15 @@ void ld_hl_n_m3(SM83 *cpu, Instruction *instr)
 
 void ldh_n_a_m1(SM83 *cpu, Instruction *instr)
 {
-    u8 z = mmu_read_byte(cpu->memory, cpu->reg.pc, false);
-    cpu->io.data = z;
-    cpu->lsb = cpu->io.data;
+    u8 z = sm83_read(cpu->memory, cpu->reg.pc);
+    cpu->memory->cpu_bus.data = z;
+    cpu->lsb = cpu->memory->cpu_bus.data;
     idu_increment(&cpu->reg.pc);
 }
 void ldh_n_a_m2(SM83 *cpu, Instruction *instr)
 {
     cpu->address = unsigned_16(0xFF, cpu->lsb);
-    mmu_write_byte(cpu->memory, cpu->address, cpu->reg.a);
+    sm83_write(cpu->memory, cpu->address, cpu->reg.a);
 }
 void ldh_n_a_m3(SM83 *cpu, Instruction *instr)
 {
@@ -510,26 +505,26 @@ void ldh_n_a_m3(SM83 *cpu, Instruction *instr)
 
 void ldh_a_n_m1(SM83 *cpu, Instruction *instr)
 {
-    u8 z = mmu_read_byte(cpu->memory, cpu->reg.pc, false);
-    cpu->io.data = z;
-    cpu->lsb = cpu->io.data;
+    u8 z = sm83_read(cpu->memory, cpu->reg.pc);
+    cpu->memory->cpu_bus.data = z;
+    cpu->lsb = cpu->memory->cpu_bus.data;
     idu_increment(&cpu->reg.pc);
 }
 void ldh_a_n_m2(SM83 *cpu, Instruction *instr)
 {
     cpu->address = unsigned_16(0xFF, cpu->lsb);
-    cpu->io.data = mmu_read_byte(cpu->memory, cpu->address, false);
+    cpu->memory->cpu_bus.data = sm83_read(cpu->memory, cpu->address);
 }
 void ldh_a_n_m3(SM83 *cpu, Instruction *instr)
 {
-    cpu->reg.a = cpu->io.data;
+    cpu->reg.a = cpu->memory->cpu_bus.data;
     fetch(cpu);
 }
 
 void ldh_c_a_m1(SM83 *cpu, Instruction *instr)
 {
     cpu->address = unsigned_16(0xFF, lsb(cpu->reg.c));
-    mmu_write_byte(cpu->memory, cpu->address, cpu->reg.a);
+    sm83_write(cpu->memory, cpu->address, cpu->reg.a);
 }
 void ldh_c_a_m2(SM83 *cpu, Instruction *instr)
 {
@@ -539,12 +534,12 @@ void ldh_c_a_m2(SM83 *cpu, Instruction *instr)
 void ldh_a_c_m1(SM83 *cpu, Instruction *instr)
 {
     cpu->address = unsigned_16(0xFF, lsb(cpu->reg.c));
-    u8 z = mmu_read_byte(cpu->memory, cpu->address, false);
-    cpu->io.data = z;
+    u8 z = sm83_read(cpu->memory, cpu->address);
+    cpu->memory->cpu_bus.data = z;
 }
 void ldh_a_c_m2(SM83 *cpu, Instruction *instr)
 {
-    cpu->reg.a = cpu->io.data;
+    cpu->reg.a = cpu->memory->cpu_bus.data;
     fetch(cpu);
 }
 
@@ -576,16 +571,16 @@ void inc_r(SM83 *cpu, Instruction *instr)
 
 void inc_hl_m1(SM83 *cpu, Instruction *instr)
 {
-    u8 z = mmu_read_byte(cpu->memory, cpu->reg.hl, false);
-    cpu->io.data = z;
+    u8 z = sm83_read(cpu->memory, cpu->reg.hl);
+    cpu->memory->cpu_bus.data = z;
 }
 void inc_hl_m2(SM83 *cpu, Instruction *instr)
 {
     u8 carry_flag = cpu->reg.flags.c;
     cpu->reg.f = 0;
 
-    u8 result = (cpu->io.data + 1) & 0xFF;
-    mmu_write_byte(cpu->memory, cpu->reg.hl, result);
+    u8 result = (cpu->memory->cpu_bus.data + 1) & 0xFF;
+    sm83_write(cpu->memory, cpu->reg.hl, result);
 
     cpu->reg.flags.z = (result == 0);
     cpu->reg.flags.h = (result & 0xF) == 0;
@@ -625,16 +620,16 @@ void dec_r(SM83 *cpu, Instruction *instr)
 
 void dec_hl_m1(SM83 *cpu, Instruction *instr)
 {
-    u8 z = mmu_read_byte(cpu->memory, cpu->reg.hl, false);
-    cpu->io.data = z;
+    u8 z = sm83_read(cpu->memory, cpu->reg.hl);
+    cpu->memory->cpu_bus.data = z;
 }
 void dec_hl_m2(SM83 *cpu, Instruction *instr)
 {
     u8 carry_flag = cpu->reg.flags.c;
     cpu->reg.f = 0;
 
-    u8 result = (cpu->io.data - 1) & 0xFF;
-    mmu_write_byte(cpu->memory, cpu->reg.hl, result);
+    u8 result = (cpu->memory->cpu_bus.data - 1) & 0xFF;
+    sm83_write(cpu->memory, cpu->reg.hl, result);
 
     cpu->reg.flags.z = (result == 0);
     cpu->reg.flags.n = 1;
@@ -660,15 +655,15 @@ void add_r(SM83 *cpu, Instruction *instr)
 
 void add_hl_m1(SM83 *cpu, Instruction *instr)
 {
-    u8 z = mmu_read_byte(cpu->memory, cpu->reg.hl, false);
-    cpu->io.data = z;
+    u8 z = sm83_read(cpu->memory, cpu->reg.hl);
+    cpu->memory->cpu_bus.data = z;
 }
 void add_hl_m2(SM83 *cpu, Instruction *instr)
 {
-    u16 result = cpu->reg.a + cpu->io.data;
+    u16 result = cpu->reg.a + cpu->memory->cpu_bus.data;
     cpu->reg.flags.z = ((result & 0xFF) == 0);
     cpu->reg.flags.n = 0;
-    cpu->reg.flags.h = (cpu->reg.a & 0xF) + (cpu->io.data & 0xF) > 0xF;
+    cpu->reg.flags.h = (cpu->reg.a & 0xF) + (cpu->memory->cpu_bus.data & 0xF) > 0xF;
     cpu->reg.flags.c = result > 0xFF;
 
     cpu->reg.a = result & 0xFF;
@@ -703,16 +698,16 @@ void add_hl_rr_m2(SM83 *cpu, Instruction *instr)
 
 void add_n_m1(SM83 *cpu, Instruction *instr)
 {
-    u8 z = mmu_read_byte(cpu->memory, cpu->reg.pc, false);
-    cpu->io.data = z;
+    u8 z = sm83_read(cpu->memory, cpu->reg.pc);
+    cpu->memory->cpu_bus.data = z;
     idu_increment(&cpu->reg.pc);
 }
 void add_n_m2(SM83 *cpu, Instruction *instr)
 {
-    u16 result = cpu->reg.a + cpu->io.data;
+    u16 result = cpu->reg.a + cpu->memory->cpu_bus.data;
     cpu->reg.flags.z = ((result & 0xFF) == 0);
     cpu->reg.flags.n = 0;
-    cpu->reg.flags.h = (cpu->reg.a & 0xF) + (cpu->io.data & 0xF) > 0xF;
+    cpu->reg.flags.h = (cpu->reg.a & 0xF) + (cpu->memory->cpu_bus.data & 0xF) > 0xF;
     cpu->reg.flags.c = result > 0xFF;
 
     cpu->reg.a = result & 0xFF;
@@ -722,24 +717,24 @@ void add_n_m2(SM83 *cpu, Instruction *instr)
 // TODO: Test this
 void add_sp_e_m1(SM83 *cpu, Instruction *instr)
 {
-    u8 z = mmu_read_byte(cpu->memory, cpu->reg.pc, false);
-    cpu->io.data = z;
+    u8 z = sm83_read(cpu->memory, cpu->reg.pc);
+    cpu->memory->cpu_bus.data = z;
     idu_increment(&cpu->reg.pc);
 }
 // void add_sp_e_m2(SM83 *cpu, Instruction *instr)
 // {
 //     // Get sign of immediate data
-//     cpu->b = get_bit(7, cpu->io.data);
+//     cpu->b = get_bit(7, cpu->memory->cpu_bus.data);
 //     cpu->lsb = lsb(cpu->reg.sp);
 
-//     u16 result = cpu->lsb + signed_8(cpu->io.data);
+//     u16 result = cpu->lsb + signed_8(cpu->memory->cpu_bus.data);
 //     cpu->reg.flags.z = (result == 0);
 //     cpu->reg.flags.n = 0;
-//     cpu->reg.flags.h = ((cpu->lsb & 0xF) + (cpu->io.data & 0xF)) > 0xF;
+//     cpu->reg.flags.h = ((cpu->lsb & 0xF) + (cpu->memory->cpu_bus.data & 0xF)) > 0xF;
 //     cpu->reg.flags.c = result > 0xFF;
 
-//     cpu->io.data = result & 0xFF;
-//     cpu->lsb = cpu->io.data;
+//     cpu->memory->cpu_bus.data = result & 0xFF;
+//     cpu->lsb = cpu->memory->cpu_bus.data;
 // }
 // void add_sp_e_m3(SM83 *cpu, Instruction *instr)
 // {
@@ -758,7 +753,7 @@ void add_sp_e_m1(SM83 *cpu, Instruction *instr)
 // }
 void add_sp_e_m2(SM83 *cpu, Instruction *instr)
 {
-    s8 e = signed_8(cpu->io.data);
+    s8 e = signed_8(cpu->memory->cpu_bus.data);
     u16 result = cpu->reg.sp + e;
 
     cpu->reg.flags.z = 0;
@@ -790,15 +785,15 @@ void adc_r(SM83 *cpu, Instruction *instr)
 
 void adc_hl_m1(SM83 *cpu, Instruction *instr)
 {
-    u8 z = mmu_read_byte(cpu->memory, cpu->reg.hl, false);
-    cpu->io.data = z;
+    u8 z = sm83_read(cpu->memory, cpu->reg.hl);
+    cpu->memory->cpu_bus.data = z;
 }
 void adc_hl_m2(SM83 *cpu, Instruction *instr)
 {
-    u16 result = cpu->reg.a + cpu->io.data + cpu->reg.flags.c;
+    u16 result = cpu->reg.a + cpu->memory->cpu_bus.data + cpu->reg.flags.c;
     cpu->reg.flags.z = ((result & 0xFF) == 0);
     cpu->reg.flags.n = 0;
-    cpu->reg.flags.h = (cpu->reg.a & 0xF) + (cpu->io.data & 0xF) + cpu->reg.flags.c > 0xF;
+    cpu->reg.flags.h = (cpu->reg.a & 0xF) + (cpu->memory->cpu_bus.data & 0xF) + cpu->reg.flags.c > 0xF;
     cpu->reg.flags.c = result > 0xFF;
 
     cpu->reg.a = result & 0xFF;
@@ -807,16 +802,16 @@ void adc_hl_m2(SM83 *cpu, Instruction *instr)
 
 void adc_n_m1(SM83 *cpu, Instruction *instr)
 {
-    u8 z = mmu_read_byte(cpu->memory, cpu->reg.pc, false);
-    cpu->io.data = z;
+    u8 z = sm83_read(cpu->memory, cpu->reg.pc);
+    cpu->memory->cpu_bus.data = z;
     idu_increment(&cpu->reg.pc);
 }
 void adc_n_m2(SM83 *cpu, Instruction *instr)
 {
-    u16 result = cpu->reg.a + cpu->io.data + cpu->reg.flags.c;
+    u16 result = cpu->reg.a + cpu->memory->cpu_bus.data + cpu->reg.flags.c;
     cpu->reg.flags.z = ((result & 0xFF) == 0);
     cpu->reg.flags.n = 0;
-    cpu->reg.flags.h = (cpu->reg.a & 0xF) + (cpu->io.data & 0xF) + cpu->reg.flags.c > 0xF;
+    cpu->reg.flags.h = (cpu->reg.a & 0xF) + (cpu->memory->cpu_bus.data & 0xF) + cpu->reg.flags.c > 0xF;
     cpu->reg.flags.c = result > 0xFF;
 
     cpu->reg.a = result & 0xFF;
@@ -837,16 +832,16 @@ void sub_r(SM83 *cpu, Instruction *instr)
 
 void sub_hl_m1(SM83 *cpu, Instruction *instr)
 {
-    u8 z = mmu_read_byte(cpu->memory, cpu->reg.hl, false);
-    cpu->io.data = z;
+    u8 z = sm83_read(cpu->memory, cpu->reg.hl);
+    cpu->memory->cpu_bus.data = z;
 }
 void sub_hl_m2(SM83 *cpu, Instruction *instr)
 {
-    u16 result = cpu->reg.a - cpu->io.data;
+    u16 result = cpu->reg.a - cpu->memory->cpu_bus.data;
     cpu->reg.flags.z = (result == 0);
     cpu->reg.flags.n = 1;
-    cpu->reg.flags.h = (cpu->reg.a & 0xF) < (cpu->io.data & 0xF);
-    cpu->reg.flags.c = cpu->reg.a < cpu->io.data;
+    cpu->reg.flags.h = (cpu->reg.a & 0xF) < (cpu->memory->cpu_bus.data & 0xF);
+    cpu->reg.flags.c = cpu->reg.a < cpu->memory->cpu_bus.data;
 
     cpu->reg.a = result & 0xFF;
     fetch(cpu);
@@ -854,17 +849,17 @@ void sub_hl_m2(SM83 *cpu, Instruction *instr)
 
 void sub_n_m1(SM83 *cpu, Instruction *instr)
 {
-    u8 z = mmu_read_byte(cpu->memory, cpu->reg.pc, false);
-    cpu->io.data = z;
+    u8 z = sm83_read(cpu->memory, cpu->reg.pc);
+    cpu->memory->cpu_bus.data = z;
     idu_increment(&cpu->reg.pc);
 }
 void sub_n_m2(SM83 *cpu, Instruction *instr)
 {
-    u16 result = cpu->reg.a - cpu->io.data;
+    u16 result = cpu->reg.a - cpu->memory->cpu_bus.data;
     cpu->reg.flags.z = (result == 0);
     cpu->reg.flags.n = 1;
-    cpu->reg.flags.h = (cpu->reg.a & 0xF) < (cpu->io.data & 0xF);
-    cpu->reg.flags.c = cpu->reg.a < cpu->io.data;
+    cpu->reg.flags.h = (cpu->reg.a & 0xF) < (cpu->memory->cpu_bus.data & 0xF);
+    cpu->reg.flags.c = cpu->reg.a < cpu->memory->cpu_bus.data;
 
     cpu->reg.a = result & 0xFF;
     fetch(cpu);
@@ -884,16 +879,16 @@ void sbc_r(SM83 *cpu, Instruction *instr)
 
 void sbc_hl_m1(SM83 *cpu, Instruction *instr)
 {
-    u8 z = mmu_read_byte(cpu->memory, cpu->reg.hl, false);
-    cpu->io.data = z;
+    u8 z = sm83_read(cpu->memory, cpu->reg.hl);
+    cpu->memory->cpu_bus.data = z;
 }
 void sbc_hl_m2(SM83 *cpu, Instruction *instr)
 {
-    u16 result = cpu->reg.a - cpu->io.data - cpu->reg.flags.c;
+    u16 result = cpu->reg.a - cpu->memory->cpu_bus.data - cpu->reg.flags.c;
     cpu->reg.flags.z = ((result & 0xFF) == 0);
     cpu->reg.flags.n = 1;
-    cpu->reg.flags.h = (cpu->reg.a & 0xF) - cpu->reg.flags.c < (cpu->io.data & 0xF);
-    cpu->reg.flags.c = cpu->reg.a - cpu->reg.flags.c < cpu->io.data;
+    cpu->reg.flags.h = (cpu->reg.a & 0xF) - cpu->reg.flags.c < (cpu->memory->cpu_bus.data & 0xF);
+    cpu->reg.flags.c = cpu->reg.a - cpu->reg.flags.c < cpu->memory->cpu_bus.data;
 
     cpu->reg.a = result & 0xFF;
     fetch(cpu);
@@ -901,17 +896,17 @@ void sbc_hl_m2(SM83 *cpu, Instruction *instr)
 
 void sbc_n_m1(SM83 *cpu, Instruction *instr)
 {
-    u8 z = mmu_read_byte(cpu->memory, cpu->reg.pc, false);
-    cpu->io.data = z;
+    u8 z = sm83_read(cpu->memory, cpu->reg.pc);
+    cpu->memory->cpu_bus.data = z;
     idu_increment(&cpu->reg.pc);
 }
 void sbc_n_m2(SM83 *cpu, Instruction *instr)
 {
-    u16 result = cpu->reg.a - cpu->io.data - cpu->reg.flags.c;
+    u16 result = cpu->reg.a - cpu->memory->cpu_bus.data - cpu->reg.flags.c;
     cpu->reg.flags.z = ((result & 0xFF) == 0);
     cpu->reg.flags.n = 1;
-    cpu->reg.flags.h = (cpu->reg.a & 0xF) - cpu->reg.flags.c < (cpu->io.data & 0xF);
-    cpu->reg.flags.c = cpu->reg.a - cpu->reg.flags.c < cpu->io.data;
+    cpu->reg.flags.h = (cpu->reg.a & 0xF) - cpu->reg.flags.c < (cpu->memory->cpu_bus.data & 0xF);
+    cpu->reg.flags.c = cpu->reg.a - cpu->reg.flags.c < cpu->memory->cpu_bus.data;
 
     cpu->reg.a = result & 0xFF;
     fetch(cpu);
@@ -931,12 +926,12 @@ void and_r(SM83 *cpu, Instruction *instr)
 
 void and_hl_m1(SM83 *cpu, Instruction *instr)
 {
-    u8 z = mmu_read_byte(cpu->memory, cpu->reg.hl, false);
-    cpu->io.data = z;
+    u8 z = sm83_read(cpu->memory, cpu->reg.hl);
+    cpu->memory->cpu_bus.data = z;
 }
 void and_hl_m2(SM83 *cpu, Instruction *instr)
 {
-    u8 result = cpu->reg.a & cpu->io.data;
+    u8 result = cpu->reg.a & cpu->memory->cpu_bus.data;
     cpu->reg.flags.z = (result == 0);
     cpu->reg.flags.n = 0;
     cpu->reg.flags.h = 1;
@@ -948,13 +943,13 @@ void and_hl_m2(SM83 *cpu, Instruction *instr)
 
 void and_n_m1(SM83 *cpu, Instruction *instr)
 {
-    u8 z = mmu_read_byte(cpu->memory, cpu->reg.pc, false);
-    cpu->io.data = z;
+    u8 z = sm83_read(cpu->memory, cpu->reg.pc);
+    cpu->memory->cpu_bus.data = z;
     idu_increment(&cpu->reg.pc);
 }
 void and_n_m2(SM83 *cpu, Instruction *instr)
 {
-    u8 result = cpu->reg.a & cpu->io.data;
+    u8 result = cpu->reg.a & cpu->memory->cpu_bus.data;
     cpu->reg.flags.z = (result == 0);
     cpu->reg.flags.n = 0;
     cpu->reg.flags.h = 1;
@@ -978,12 +973,12 @@ void or_r(SM83 *cpu, Instruction *instr)
 
 void or_hl_m1(SM83 *cpu, Instruction *instr)
 {
-    u8 z = mmu_read_byte(cpu->memory, cpu->reg.hl, false);
-    cpu->io.data = z;
+    u8 z = sm83_read(cpu->memory, cpu->reg.hl);
+    cpu->memory->cpu_bus.data = z;
 }
 void or_hl_m2(SM83 *cpu, Instruction *instr)
 {
-    u8 result = cpu->reg.a | cpu->io.data;
+    u8 result = cpu->reg.a | cpu->memory->cpu_bus.data;
     cpu->reg.flags.z = (result == 0);
     cpu->reg.flags.n = 0;
     cpu->reg.flags.h = 0;
@@ -995,13 +990,13 @@ void or_hl_m2(SM83 *cpu, Instruction *instr)
 
 void or_n_m1(SM83 *cpu, Instruction *instr)
 {
-    u8 z = mmu_read_byte(cpu->memory, cpu->reg.pc, false);
-    cpu->io.data = z;
+    u8 z = sm83_read(cpu->memory, cpu->reg.pc);
+    cpu->memory->cpu_bus.data = z;
     idu_increment(&cpu->reg.pc);
 }
 void or_n_m2(SM83 *cpu, Instruction *instr)
 {
-    u8 result = cpu->reg.a | cpu->io.data;
+    u8 result = cpu->reg.a | cpu->memory->cpu_bus.data;
     cpu->reg.flags.z = (result == 0);
     cpu->reg.flags.n = 0;
     cpu->reg.flags.h = 0;
@@ -1025,12 +1020,12 @@ void xor_r(SM83 *cpu, Instruction *instr)
 
 void xor_hl_m1(SM83 *cpu, Instruction *instr)
 {
-    u8 z = mmu_read_byte(cpu->memory, cpu->reg.hl, false);
-    cpu->io.data = z;
+    u8 z = sm83_read(cpu->memory, cpu->reg.hl);
+    cpu->memory->cpu_bus.data = z;
 }
 void xor_hl_m2(SM83 *cpu, Instruction *instr)
 {
-    u8 result = cpu->reg.a ^ cpu->io.data;
+    u8 result = cpu->reg.a ^ cpu->memory->cpu_bus.data;
     cpu->reg.flags.z = (result == 0);
     cpu->reg.flags.n = 0;
     cpu->reg.flags.h = 0;
@@ -1042,13 +1037,13 @@ void xor_hl_m2(SM83 *cpu, Instruction *instr)
 
 void xor_n_m1(SM83 *cpu, Instruction *instr)
 {
-    u8 z = mmu_read_byte(cpu->memory, cpu->reg.pc, false);
-    cpu->io.data = z;
+    u8 z = sm83_read(cpu->memory, cpu->reg.pc);
+    cpu->memory->cpu_bus.data = z;
     idu_increment(&cpu->reg.pc);
 }
 void xor_n_m2(SM83 *cpu, Instruction *instr)
 {
-    u8 result = cpu->reg.a ^ cpu->io.data;
+    u8 result = cpu->reg.a ^ cpu->memory->cpu_bus.data;
     cpu->reg.flags.z = (result == 0);
     cpu->reg.flags.n = 0;
     cpu->reg.flags.h = 0;
@@ -1070,32 +1065,32 @@ void cp_r(SM83 *cpu, Instruction *instr)
 
 void cp_hl_m1(SM83 *cpu, Instruction *instr)
 {
-    u8 z = mmu_read_byte(cpu->memory, cpu->reg.hl, false);
-    cpu->io.data = z;
+    u8 z = sm83_read(cpu->memory, cpu->reg.hl);
+    cpu->memory->cpu_bus.data = z;
 }
 void cp_hl_m2(SM83 *cpu, Instruction *instr)
 {
-    u16 result = cpu->reg.a - cpu->io.data;
+    u16 result = cpu->reg.a - cpu->memory->cpu_bus.data;
     cpu->reg.flags.z = (result == 0);
     cpu->reg.flags.n = 1;
-    cpu->reg.flags.h = (cpu->reg.a & 0xF) < (cpu->io.data & 0xF);
-    cpu->reg.flags.c = cpu->reg.a < cpu->io.data;
+    cpu->reg.flags.h = (cpu->reg.a & 0xF) < (cpu->memory->cpu_bus.data & 0xF);
+    cpu->reg.flags.c = cpu->reg.a < cpu->memory->cpu_bus.data;
     fetch(cpu);
 }
 
 void cp_n_m1(SM83 *cpu, Instruction *instr)
 {
-    u8 z = mmu_read_byte(cpu->memory, cpu->reg.pc, false);
-    cpu->io.data = z;
+    u8 z = sm83_read(cpu->memory, cpu->reg.pc);
+    cpu->memory->cpu_bus.data = z;
     idu_increment(&cpu->reg.pc);
 }
 void cp_n_m2(SM83 *cpu, Instruction *instr)
 {
-    u16 result = cpu->reg.a - cpu->io.data;
+    u16 result = cpu->reg.a - cpu->memory->cpu_bus.data;
     cpu->reg.flags.z = (result == 0);
     cpu->reg.flags.n = 1;
-    cpu->reg.flags.h = (cpu->reg.a & 0xF) < (cpu->io.data & 0xF);
-    cpu->reg.flags.c = cpu->reg.a < cpu->io.data;
+    cpu->reg.flags.h = (cpu->reg.a & 0xF) < (cpu->memory->cpu_bus.data & 0xF);
+    cpu->reg.flags.c = cpu->reg.a < cpu->memory->cpu_bus.data;
     fetch(cpu);
 }
 
@@ -1130,7 +1125,7 @@ void rrca(SM83 *cpu, Instruction *instr)
 
 void rlca(SM83 *cpu, Instruction *instr)
 {
-    cpu->reg.a = rotate_left(cpu, cpu->reg.a);
+    cpu->reg.a = rotate_left_carry(cpu, cpu->reg.a);
     cpu->reg.flags.z = 0;
     cpu->reg.flags.n = 0;
     cpu->reg.flags.h = 0;
@@ -1204,7 +1199,7 @@ void cb_fetch(SM83 *cpu, Instruction *instr)
     ASSERT(instr->microop_index == 1);
 
     cpu->instructions[cpu->reg.ir].microop_index = 0;
-    cpu->reg.ir = mmu_read_byte(cpu->memory, cpu->reg.pc, false);
+    cpu->reg.ir = sm83_read(cpu->memory, cpu->reg.pc);
     idu_increment(&cpu->reg.pc);
 
     cpu->instructions = cb_instructions;
@@ -1216,16 +1211,16 @@ void cb_fetch(SM83 *cpu, Instruction *instr)
 
 void jp_nn_m1(SM83 *cpu, Instruction *instr)
 {
-    u8 z = mmu_read_byte(cpu->memory, cpu->reg.pc, false);
-    cpu->io.data = z;
-    cpu->lsb = cpu->io.data;
+    u8 z = sm83_read(cpu->memory, cpu->reg.pc);
+    cpu->memory->cpu_bus.data = z;
+    cpu->lsb = cpu->memory->cpu_bus.data;
     idu_increment(&cpu->reg.pc);
 }
 void jp_nn_m2(SM83 *cpu, Instruction *instr)
 {
-    u8 w = mmu_read_byte(cpu->memory, cpu->reg.pc, false);
-    cpu->io.data = w;
-    cpu->msb = cpu->io.data;
+    u8 w = sm83_read(cpu->memory, cpu->reg.pc);
+    cpu->memory->cpu_bus.data = w;
+    cpu->msb = cpu->memory->cpu_bus.data;
     idu_increment(&cpu->reg.pc);
 }
 void jp_nn_m3(SM83 *cpu, Instruction *instr)
@@ -1239,12 +1234,12 @@ void jp_nn_m4(SM83 *cpu, Instruction *instr)
 
 void jp_cc_nn_m1(SM83 *cpu, Instruction *instr)
 {
-    cpu->lsb = mmu_read_byte(cpu->memory, cpu->reg.pc, false);
+    cpu->lsb = sm83_read(cpu->memory, cpu->reg.pc);
     idu_increment(&cpu->reg.pc);
 }
 void jp_cc_nn_m2(SM83 *cpu, Instruction *instr)
 {
-    cpu->msb = mmu_read_byte(cpu->memory, cpu->reg.pc, false);
+    cpu->msb = sm83_read(cpu->memory, cpu->reg.pc);
     idu_increment(&cpu->reg.pc);
 }
 void jp_cc_nn_m3(SM83 *cpu, Instruction *instr)
@@ -1266,12 +1261,12 @@ void jp_cc_nn_m4(SM83 *cpu, Instruction *instr)
 
 void jp_ncc_nn_m1(SM83 *cpu, Instruction *instr)
 {
-    cpu->lsb = mmu_read_byte(cpu->memory, cpu->reg.pc, false);
+    cpu->lsb = sm83_read(cpu->memory, cpu->reg.pc);
     idu_increment(&cpu->reg.pc);
 }
 void jp_ncc_nn_m2(SM83 *cpu, Instruction *instr)
 {
-    cpu->msb = mmu_read_byte(cpu->memory, cpu->reg.pc, false);
+    cpu->msb = sm83_read(cpu->memory, cpu->reg.pc);
     idu_increment(&cpu->reg.pc);
 }
 void jp_ncc_nn_m3(SM83 *cpu, Instruction *instr)
@@ -1300,15 +1295,15 @@ void jp_hl(SM83 *cpu, Instruction *instr)
 // TODO: Test this
 void jr_e_m1(SM83 *cpu, Instruction *instr)
 {
-    u8 z = mmu_read_byte(cpu->memory, cpu->reg.pc, false);
-    cpu->io.data = z;
-    cpu->lsb = cpu->io.data;
+    u8 z = sm83_read(cpu->memory, cpu->reg.pc);
+    cpu->memory->cpu_bus.data = z;
+    cpu->lsb = cpu->memory->cpu_bus.data;
     idu_increment(&cpu->reg.pc);
 }
 // void jr_e_m2(SM83 *cpu, Instruction *instr)
 // {
-//     bool z_sign = (bit(7, cpu->io.data) != 0);
-//     u16 result = cpu->io.data + lsb(cpu->reg.pc);
+//     bool z_sign = (bit(7, cpu->memory->cpu_bus.data) != 0);
+//     u16 result = cpu->memory->cpu_bus.data + lsb(cpu->reg.pc);
 //     bool carry = result > 0xFF;
 //     cpu->lsb = result & 0xFF;
 
@@ -1323,12 +1318,12 @@ void jr_e_m1(SM83 *cpu, Instruction *instr)
 //     }
 
 //     u8 w = msb(cpu->reg.pc) + adj;
-//     cpu->io.data = w;
-//     cpu->msb = cpu->io.data;
+//     cpu->memory->cpu_bus.data = w;
+//     cpu->msb = cpu->memory->cpu_bus.data;
 // }
 void jr_e_m2(SM83 *cpu, Instruction *instr)
 {
-    cpu->reg.pc = (s16)cpu->reg.pc + signed_8(cpu->io.data);
+    cpu->reg.pc = (s16)cpu->reg.pc + signed_8(cpu->memory->cpu_bus.data);
 }
 void jr_e_m3(SM83 *cpu, Instruction *instr)
 {
@@ -1338,15 +1333,15 @@ void jr_e_m3(SM83 *cpu, Instruction *instr)
 
 void jr_cc_e_m1(SM83 *cpu, Instruction *instr)
 {
-    u8 e = mmu_read_byte(cpu->memory, cpu->reg.pc, false);
-    cpu->io.data = e;
+    u8 e = sm83_read(cpu->memory, cpu->reg.pc);
+    cpu->memory->cpu_bus.data = e;
     idu_increment(&cpu->reg.pc);
 }
 void jr_cc_e_m2(SM83 *cpu, Instruction *instr)
 {
     if ((cpu->reg.f & instr->flags))
     {
-        cpu->reg.pc = cpu->reg.pc + signed_8(cpu->io.data);
+        cpu->reg.pc = cpu->reg.pc + signed_8(cpu->memory->cpu_bus.data);
     }
     else
     {
@@ -1360,15 +1355,15 @@ void jr_cc_e_m3(SM83 *cpu, Instruction *instr)
 
 void jr_ncc_e_m1(SM83 *cpu, Instruction *instr)
 {
-    u8 e = mmu_read_byte(cpu->memory, cpu->reg.pc, false);
-    cpu->io.data = e;
+    u8 e = sm83_read(cpu->memory, cpu->reg.pc);
+    cpu->memory->cpu_bus.data = e;
     idu_increment(&cpu->reg.pc);
 }
 void jr_ncc_e_m2(SM83 *cpu, Instruction *instr)
 {
     if (!(cpu->reg.f & instr->flags))
     {
-        cpu->reg.pc = cpu->reg.pc + signed_8(cpu->io.data);
+        cpu->reg.pc = cpu->reg.pc + signed_8(cpu->memory->cpu_bus.data);
     }
     else
     {
@@ -1382,16 +1377,16 @@ void jr_ncc_e_m3(SM83 *cpu, Instruction *instr)
 
 void call_nn_m1(SM83 *cpu, Instruction *instr)
 {
-    u8 z = mmu_read_byte(cpu->memory, cpu->reg.pc, false);
-    cpu->io.data = z;
-    cpu->lsb = cpu->io.data;
+    u8 z = sm83_read(cpu->memory, cpu->reg.pc);
+    cpu->memory->cpu_bus.data = z;
+    cpu->lsb = cpu->memory->cpu_bus.data;
     idu_increment(&cpu->reg.pc);
 }
 void call_nn_m2(SM83 *cpu, Instruction *instr)
 {
-    u8 w = mmu_read_byte(cpu->memory, cpu->reg.pc, false);
-    cpu->io.data = w;
-    cpu->msb = cpu->io.data;
+    u8 w = sm83_read(cpu->memory, cpu->reg.pc);
+    cpu->memory->cpu_bus.data = w;
+    cpu->msb = cpu->memory->cpu_bus.data;
     idu_increment(&cpu->reg.pc);
 }
 void call_nn_m3(SM83 *cpu, Instruction *instr)
@@ -1400,12 +1395,12 @@ void call_nn_m3(SM83 *cpu, Instruction *instr)
 }
 void call_nn_m4(SM83 *cpu, Instruction *instr)
 {
-    mmu_write_byte(cpu->memory, cpu->reg.sp, msb(cpu->reg.pc));
+    sm83_write(cpu->memory, cpu->reg.sp, msb(cpu->reg.pc));
     idu_decrement(&cpu->reg.sp);
 }
 void call_nn_m5(SM83 *cpu, Instruction *instr)
 {
-    mmu_write_byte(cpu->memory, cpu->reg.sp, lsb(cpu->reg.pc));
+    sm83_write(cpu->memory, cpu->reg.sp, lsb(cpu->reg.pc));
     cpu->reg.pc = unsigned_16(cpu->msb, cpu->lsb);
 }
 void call_nn_m6(SM83 *cpu, Instruction *instr)
@@ -1416,12 +1411,12 @@ void call_nn_m6(SM83 *cpu, Instruction *instr)
 // TODO: Fix this
 void call_cc_nn_m1(SM83 *cpu, Instruction *instr)
 {
-    cpu->lsb = mmu_read_byte(cpu->memory, cpu->reg.pc, false);
+    cpu->lsb = sm83_read(cpu->memory, cpu->reg.pc);
     idu_increment(&cpu->reg.pc);
 }
 void call_cc_nn_m2(SM83 *cpu, Instruction *instr)
 {
-    cpu->msb = mmu_read_byte(cpu->memory, cpu->reg.pc, false);
+    cpu->msb = sm83_read(cpu->memory, cpu->reg.pc);
     idu_increment(&cpu->reg.pc);
 }
 void call_cc_nn_m3(SM83 *cpu, Instruction *instr)
@@ -1435,24 +1430,24 @@ void call_cc_nn_m3(SM83 *cpu, Instruction *instr)
 void call_cc_nn_m4(SM83 *cpu, Instruction *instr)
 {
     idu_decrement(&cpu->reg.sp);
-    mmu_write_byte(cpu->memory, cpu->reg.sp, msb(cpu->reg.pc));
+    sm83_write(cpu->memory, cpu->reg.sp, msb(cpu->reg.pc));
 }
 void call_cc_nn_m5(SM83 *cpu, Instruction *instr)
 {
     idu_decrement(&cpu->reg.sp);
-    mmu_write_byte(cpu->memory, cpu->reg.sp, lsb(cpu->reg.pc));
+    sm83_write(cpu->memory, cpu->reg.sp, lsb(cpu->reg.pc));
     cpu->reg.pc = cpu->nn;
     fetch(cpu);
 }
 
 void call_ncc_nn_m1(SM83 *cpu, Instruction *instr)
 {
-    cpu->lsb = mmu_read_byte(cpu->memory, cpu->reg.pc, false);
+    cpu->lsb = sm83_read(cpu->memory, cpu->reg.pc);
     idu_increment(&cpu->reg.pc);
 }
 void call_ncc_nn_m2(SM83 *cpu, Instruction *instr)
 {
-    cpu->msb = mmu_read_byte(cpu->memory, cpu->reg.pc, false);
+    cpu->msb = sm83_read(cpu->memory, cpu->reg.pc);
     idu_increment(&cpu->reg.pc);
 }
 void call_ncc_nn_m3(SM83 *cpu, Instruction *instr)
@@ -1466,12 +1461,12 @@ void call_ncc_nn_m3(SM83 *cpu, Instruction *instr)
 void call_ncc_nn_m4(SM83 *cpu, Instruction *instr)
 {
     idu_decrement(&cpu->reg.sp);
-    mmu_write_byte(cpu->memory, cpu->reg.sp, msb(cpu->reg.pc));
+    sm83_write(cpu->memory, cpu->reg.sp, msb(cpu->reg.pc));
 }
 void call_ncc_nn_m5(SM83 *cpu, Instruction *instr)
 {
     idu_decrement(&cpu->reg.sp);
-    mmu_write_byte(cpu->memory, cpu->reg.sp, lsb(cpu->reg.pc));
+    sm83_write(cpu->memory, cpu->reg.sp, lsb(cpu->reg.pc));
     cpu->reg.pc = cpu->nn;
     fetch(cpu);
 }
@@ -1479,16 +1474,16 @@ void call_ncc_nn_m5(SM83 *cpu, Instruction *instr)
 // Returns
 void ret_m1(SM83 *cpu, Instruction *instr)
 {
-    u8 z = mmu_read_byte(cpu->memory, cpu->reg.sp, false);
-    cpu->io.data = z;
-    cpu->lsb = cpu->io.data;
+    u8 z = sm83_read(cpu->memory, cpu->reg.sp);
+    cpu->memory->cpu_bus.data = z;
+    cpu->lsb = cpu->memory->cpu_bus.data;
     idu_increment(&cpu->reg.sp);
 }
 void ret_m2(SM83 *cpu, Instruction *instr)
 {
-    u8 w = mmu_read_byte(cpu->memory, cpu->reg.sp, false);
-    cpu->io.data = w;
-    cpu->msb = cpu->io.data;
+    u8 w = sm83_read(cpu->memory, cpu->reg.sp);
+    cpu->memory->cpu_bus.data = w;
+    cpu->msb = cpu->memory->cpu_bus.data;
     idu_increment(&cpu->reg.sp);
 }
 void ret_m3(SM83 *cpu, Instruction *instr)
@@ -1510,16 +1505,16 @@ void ret_cc_m1(SM83 *cpu, Instruction *instr)
 }
 void ret_cc_m2(SM83 *cpu, Instruction *instr)
 {
-    u8 z = mmu_read_byte(cpu->memory, cpu->reg.sp, false);
-    cpu->io.data = z;
-    cpu->lsb = cpu->io.data;
+    u8 z = sm83_read(cpu->memory, cpu->reg.sp);
+    cpu->memory->cpu_bus.data = z;
+    cpu->lsb = cpu->memory->cpu_bus.data;
     idu_increment(&cpu->reg.sp);
 }
 void ret_cc_m3(SM83 *cpu, Instruction *instr)
 {
-    u8 w = mmu_read_byte(cpu->memory, cpu->reg.sp, false);
-    cpu->io.data = w;
-    cpu->msb = cpu->io.data;
+    u8 w = sm83_read(cpu->memory, cpu->reg.sp);
+    cpu->memory->cpu_bus.data = w;
+    cpu->msb = cpu->memory->cpu_bus.data;
     idu_increment(&cpu->reg.sp);
 }
 void ret_cc_m4(SM83 *cpu, Instruction *instr)
@@ -1541,16 +1536,16 @@ void ret_ncc_m1(SM83 *cpu, Instruction *instr)
 }
 void ret_ncc_m2(SM83 *cpu, Instruction *instr)
 {
-    u8 z = mmu_read_byte(cpu->memory, cpu->reg.sp, false);
-    cpu->io.data = z;
-    cpu->lsb = cpu->io.data;
+    u8 z = sm83_read(cpu->memory, cpu->reg.sp);
+    cpu->memory->cpu_bus.data = z;
+    cpu->lsb = cpu->memory->cpu_bus.data;
     idu_increment(&cpu->reg.sp);
 }
 void ret_ncc_m3(SM83 *cpu, Instruction *instr)
 {
-    u8 w = mmu_read_byte(cpu->memory, cpu->reg.sp, false);
-    cpu->io.data = w;
-    cpu->msb = cpu->io.data;
+    u8 w = sm83_read(cpu->memory, cpu->reg.sp);
+    cpu->memory->cpu_bus.data = w;
+    cpu->msb = cpu->memory->cpu_bus.data;
     idu_increment(&cpu->reg.sp);
 }
 void ret_ncc_m4(SM83 *cpu, Instruction *instr)
@@ -1564,16 +1559,16 @@ void ret_ncc_m5(SM83 *cpu, Instruction *instr)
 
 void reti_m1(SM83 *cpu, Instruction *instr)
 {
-    u8 z = mmu_read_byte(cpu->memory, cpu->reg.sp, false);
-    cpu->io.data = z;
-    cpu->lsb = cpu->io.data;
+    u8 z = sm83_read(cpu->memory, cpu->reg.sp);
+    cpu->memory->cpu_bus.data = z;
+    cpu->lsb = cpu->memory->cpu_bus.data;
     idu_increment(&cpu->reg.sp);
 }
 void reti_m2(SM83 *cpu, Instruction *instr)
 {
-    u8 w = mmu_read_byte(cpu->memory, cpu->reg.sp, false);
-    cpu->io.data = w;
-    cpu->msb = cpu->io.data;
+    u8 w = sm83_read(cpu->memory, cpu->reg.sp);
+    cpu->memory->cpu_bus.data = w;
+    cpu->msb = cpu->memory->cpu_bus.data;
     idu_increment(&cpu->reg.sp);
 }
 void reti_m3(SM83 *cpu, Instruction *instr)
@@ -1593,13 +1588,13 @@ void push_rr_m1(SM83 *cpu, Instruction *instr)
 void push_rr_m2(SM83 *cpu, Instruction *instr)
 {
     u16 rr = cpu->reg.word_regs[instr->args[0].reg16];
-    mmu_write_byte(cpu->memory, cpu->reg.sp, msb(rr));
+    sm83_write(cpu->memory, cpu->reg.sp, msb(rr));
     idu_decrement(&cpu->reg.sp);
 }
 void push_rr_m3(SM83 *cpu, Instruction *instr)
 {
     u16 rr = cpu->reg.word_regs[instr->args[0].reg16];
-    mmu_write_byte(cpu->memory, cpu->reg.sp, lsb(rr));
+    sm83_write(cpu->memory, cpu->reg.sp, lsb(rr));
 }
 void push_rr_m4(SM83 *cpu, Instruction *instr)
 {
@@ -1608,16 +1603,16 @@ void push_rr_m4(SM83 *cpu, Instruction *instr)
 
 void pop_rr_m1(SM83 *cpu, Instruction *instr)
 {
-    u8 z = mmu_read_byte(cpu->memory, cpu->reg.sp, false);
-    cpu->io.data = z;
-    cpu->lsb = cpu->io.data;
+    u8 z = sm83_read(cpu->memory, cpu->reg.sp);
+    cpu->memory->cpu_bus.data = z;
+    cpu->lsb = cpu->memory->cpu_bus.data;
     idu_increment(&cpu->reg.sp);
 }
 void pop_rr_m2(SM83 *cpu, Instruction *instr)
 {
-    u8 w = mmu_read_byte(cpu->memory, cpu->reg.sp, false);
-    cpu->io.data = w;
-    cpu->msb = cpu->io.data;
+    u8 w = sm83_read(cpu->memory, cpu->reg.sp);
+    cpu->memory->cpu_bus.data = w;
+    cpu->msb = cpu->memory->cpu_bus.data;
     idu_increment(&cpu->reg.sp);
 }
 void pop_rr_m3(SM83 *cpu, Instruction *instr)
@@ -1640,12 +1635,12 @@ void rst_n_m1(SM83 *cpu, Instruction *instr)
 }
 void rst_n_m2(SM83 *cpu, Instruction *instr)
 {
-    mmu_write_byte(cpu->memory, cpu->reg.sp, msb(cpu->reg.pc));
+    sm83_write(cpu->memory, cpu->reg.sp, msb(cpu->reg.pc));
     idu_decrement(&cpu->reg.sp);
 }
 void rst_n_m3(SM83 *cpu, Instruction *instr)
 {
-    mmu_write_byte(cpu->memory, cpu->reg.sp, lsb(cpu->reg.pc));
+    sm83_write(cpu->memory, cpu->reg.sp, lsb(cpu->reg.pc));
     cpu->reg.pc = instr->args[0].data;
 }
 void rst_n_m4(SM83 *cpu, Instruction *instr)
@@ -1656,7 +1651,7 @@ void rst_n_m4(SM83 *cpu, Instruction *instr)
 // CB-prefixed instructions
 void rlc_r(SM83 *cpu, Instruction *instr)
 {
-    cpu->reg.byte_regs[instr->args[0].reg8] = rotate_left(cpu, cpu->reg.byte_regs[instr->args[0].reg8]);
+    cpu->reg.byte_regs[instr->args[0].reg8] = rotate_left_carry(cpu, cpu->reg.byte_regs[instr->args[0].reg8]);
     cpu->reg.flags.n = 0;
     cpu->reg.flags.h = 0;
     fetch(cpu);
@@ -1664,15 +1659,15 @@ void rlc_r(SM83 *cpu, Instruction *instr)
 
 void rlc_hl_m1(SM83 *cpu, Instruction *instr)
 {
-    u8 z = mmu_read_byte(cpu->memory, cpu->reg.hl, false);
-    cpu->io.data = z;
+    u8 z = sm83_read(cpu->memory, cpu->reg.hl);
+    cpu->memory->cpu_bus.data = z;
 }
 void rlc_hl_m2(SM83 *cpu, Instruction *instr)
 {
-    cpu->io.data = rotate_left_carry(cpu, cpu->io.data);
+    cpu->memory->cpu_bus.data = rotate_left_carry(cpu, cpu->memory->cpu_bus.data);
     cpu->reg.flags.n = 0;
     cpu->reg.flags.h = 0;
-    mmu_write_byte(cpu->memory, cpu->reg.hl, cpu->io.data);
+    sm83_write(cpu->memory, cpu->reg.hl, cpu->memory->cpu_bus.data);
 }
 void rlc_hl_m3(SM83 *cpu, Instruction *instr)
 {
@@ -1689,15 +1684,15 @@ void rrc_r(SM83 *cpu, Instruction *instr)
 
 void rrc_hl_m1(SM83 *cpu, Instruction *instr)
 {
-    u8 z = mmu_read_byte(cpu->memory, cpu->reg.hl, false);
-    cpu->io.data = z;
+    u8 z = sm83_read(cpu->memory, cpu->reg.hl);
+    cpu->memory->cpu_bus.data = z;
 }
 void rrc_hl_m2(SM83 *cpu, Instruction *instr)
 {
-    cpu->io.data = rotate_right_carry(cpu, cpu->io.data);
+    cpu->memory->cpu_bus.data = rotate_right_carry(cpu, cpu->memory->cpu_bus.data);
     cpu->reg.flags.n = 0;
     cpu->reg.flags.h = 0;
-    mmu_write_byte(cpu->memory, cpu->reg.hl, cpu->io.data);
+    sm83_write(cpu->memory, cpu->reg.hl, cpu->memory->cpu_bus.data);
 }
 void rrc_hl_m3(SM83 *cpu, Instruction *instr)
 {
@@ -1715,15 +1710,15 @@ void rl_r(SM83 *cpu, Instruction *instr)
 
 void rl_hl_m1(SM83 *cpu, Instruction *instr)
 {
-    u8 z = mmu_read_byte(cpu->memory, cpu->reg.hl, false);
-    cpu->io.data = z;
+    u8 z = sm83_read(cpu->memory, cpu->reg.hl);
+    cpu->memory->cpu_bus.data = z;
 }
 void rl_hl_m2(SM83 *cpu, Instruction *instr)
 {
-    cpu->io.data = rotate_left(cpu, cpu->io.data);
+    cpu->memory->cpu_bus.data = rotate_left(cpu, cpu->memory->cpu_bus.data);
     cpu->reg.flags.n = 0;
     cpu->reg.flags.h = 0;
-    mmu_write_byte(cpu->memory, cpu->reg.hl, cpu->io.data);
+    sm83_write(cpu->memory, cpu->reg.hl, cpu->memory->cpu_bus.data);
 }
 void rl_hl_m3(SM83 *cpu, Instruction *instr)
 {
@@ -1740,15 +1735,15 @@ void rr_r(SM83 *cpu, Instruction *instr)
 
 void rr_hl_m1(SM83 *cpu, Instruction *instr)
 {
-    u8 z = mmu_read_byte(cpu->memory, cpu->reg.hl, false);
-    cpu->io.data = z;
+    u8 z = sm83_read(cpu->memory, cpu->reg.hl);
+    cpu->memory->cpu_bus.data = z;
 }
 void rr_hl_m2(SM83 *cpu, Instruction *instr)
 {
-    cpu->io.data = rotate_right(cpu, cpu->io.data);
+    cpu->memory->cpu_bus.data = rotate_right(cpu, cpu->memory->cpu_bus.data);
     cpu->reg.flags.n = 0;
     cpu->reg.flags.h = 0;
-    mmu_write_byte(cpu->memory, cpu->reg.hl, cpu->io.data);
+    sm83_write(cpu->memory, cpu->reg.hl, cpu->memory->cpu_bus.data);
 }
 void rr_hl_m3(SM83 *cpu, Instruction *instr)
 {
@@ -1766,15 +1761,15 @@ void sla_r(SM83 *cpu, Instruction *instr)
 
 void sla_hl_m1(SM83 *cpu, Instruction *instr)
 {
-    u8 z = mmu_read_byte(cpu->memory, cpu->reg.hl, false);
-    cpu->io.data = z;
+    u8 z = sm83_read(cpu->memory, cpu->reg.hl);
+    cpu->memory->cpu_bus.data = z;
 }
 void sla_hl_m2(SM83 *cpu, Instruction *instr)
 {
-    cpu->io.data = sla(cpu, cpu->io.data);
+    cpu->memory->cpu_bus.data = sla(cpu, cpu->memory->cpu_bus.data);
     cpu->reg.flags.n = 0;
     cpu->reg.flags.h = 0;
-    mmu_write_byte(cpu->memory, cpu->reg.hl, cpu->io.data);
+    sm83_write(cpu->memory, cpu->reg.hl, cpu->memory->cpu_bus.data);
 }
 void sla_hl_m3(SM83 *cpu, Instruction *instr)
 {
@@ -1792,15 +1787,15 @@ void sra_r(SM83 *cpu, Instruction *instr)
 
 void sra_hl_m1(SM83 *cpu, Instruction *instr)
 {
-    u8 z = mmu_read_byte(cpu->memory, cpu->reg.hl, false);
-    cpu->io.data = z;
+    u8 z = sm83_read(cpu->memory, cpu->reg.hl);
+    cpu->memory->cpu_bus.data = z;
 }
 void sra_hl_m2(SM83 *cpu, Instruction *instr)
 {
-    cpu->io.data = sra(cpu, cpu->io.data);
+    cpu->memory->cpu_bus.data = sra(cpu, cpu->memory->cpu_bus.data);
     cpu->reg.flags.n = 0;
     cpu->reg.flags.h = 0;
-    mmu_write_byte(cpu->memory, cpu->reg.hl, cpu->io.data);
+    sm83_write(cpu->memory, cpu->reg.hl, cpu->memory->cpu_bus.data);
 }
 void sra_hl_m3(SM83 *cpu, Instruction *instr)
 {
@@ -1818,15 +1813,15 @@ void swap_r(SM83 *cpu, Instruction *instr)
 
 void swap_hl_m1(SM83 *cpu, Instruction *instr)
 {
-    u8 z = mmu_read_byte(cpu->memory, cpu->reg.hl, false);
-    cpu->io.data = z;
+    u8 z = sm83_read(cpu->memory, cpu->reg.hl);
+    cpu->memory->cpu_bus.data = z;
 }
 void swap_hl_m2(SM83 *cpu, Instruction *instr)
 {
-    cpu->io.data = swap(cpu, cpu->io.data);
+    cpu->memory->cpu_bus.data = swap(cpu, cpu->memory->cpu_bus.data);
     cpu->reg.flags.n = 0;
     cpu->reg.flags.h = 0;
-    mmu_write_byte(cpu->memory, cpu->reg.hl, cpu->io.data);
+    sm83_write(cpu->memory, cpu->reg.hl, cpu->memory->cpu_bus.data);
 }
 void swap_hl_m3(SM83 *cpu, Instruction *instr)
 {
@@ -1844,15 +1839,15 @@ void srl_r(SM83 *cpu, Instruction *instr)
 
 void srl_hl_m1(SM83 *cpu, Instruction *instr)
 {
-    u8 z = mmu_read_byte(cpu->memory, cpu->reg.hl, false);
-    cpu->io.data = z;
+    u8 z = sm83_read(cpu->memory, cpu->reg.hl);
+    cpu->memory->cpu_bus.data = z;
 }
 void srl_hl_m2(SM83 *cpu, Instruction *instr)
 {
-    cpu->io.data = srl(cpu, cpu->io.data);
+    cpu->memory->cpu_bus.data = srl(cpu, cpu->memory->cpu_bus.data);
     cpu->reg.flags.n = 0;
     cpu->reg.flags.h = 0;
-    mmu_write_byte(cpu->memory, cpu->reg.hl, cpu->io.data);
+    sm83_write(cpu->memory, cpu->reg.hl, cpu->memory->cpu_bus.data);
 }
 void srl_hl_m3(SM83 *cpu, Instruction *instr)
 {
@@ -1876,8 +1871,8 @@ void bit_b_r(SM83 *cpu, Instruction *instr)
 
 void bit_b_hl_m1(SM83 *cpu, Instruction *instr)
 {
-    u8 z = mmu_read_byte(cpu->memory, cpu->reg.hl, false);
-    cpu->io.data = z;
+    u8 z = sm83_read(cpu->memory, cpu->reg.hl);
+    cpu->memory->cpu_bus.data = z;
 }
 void bit_b_hl_m2(SM83 *cpu, Instruction *instr)
 {
@@ -1885,7 +1880,7 @@ void bit_b_hl_m2(SM83 *cpu, Instruction *instr)
 
     u8 carry_flag = cpu->reg.flags.c;
 
-    cpu->reg.flags.z = ((cpu->io.data & bit_to_test) == 0);
+    cpu->reg.flags.z = ((cpu->memory->cpu_bus.data & bit_to_test) == 0);
     cpu->reg.flags.n = 0;
     cpu->reg.flags.h = 1;
     cpu->reg.flags.c = carry_flag;
@@ -1902,14 +1897,14 @@ void res_b_r(SM83 *cpu, Instruction *instr)
 
 void res_b_hl_m1(SM83 *cpu, Instruction *instr)
 {
-    u8 z = mmu_read_byte(cpu->memory, cpu->reg.hl, false);
-    cpu->io.data = z;
+    u8 z = sm83_read(cpu->memory, cpu->reg.hl);
+    cpu->memory->cpu_bus.data = z;
 }
 void res_b_hl_m2(SM83 *cpu, Instruction *instr)
 {
     u8 bit = instr->args[0].data;
-    u8 z = reset_bit(cpu->io.data, bit);
-    mmu_write_byte(cpu->memory, cpu->reg.hl, z);
+    u8 z = reset_bit(cpu->memory->cpu_bus.data, bit);
+    sm83_write(cpu->memory, cpu->reg.hl, z);
 }
 void res_b_hl_m3(SM83 *cpu, Instruction *instr)
 {
@@ -1927,14 +1922,14 @@ void set_b_r(SM83 *cpu, Instruction *instr)
 
 void set_b_hl_m1(SM83 *cpu, Instruction *instr)
 {
-    u8 z = mmu_read_byte(cpu->memory, cpu->reg.hl, false);
-    cpu->io.data = z;
+    u8 z = sm83_read(cpu->memory, cpu->reg.hl);
+    cpu->memory->cpu_bus.data = z;
 }
 void set_b_hl_m2(SM83 *cpu, Instruction *instr)
 {
     u8 bit = instr->args[0].data;
-    u8 z = set_bit(cpu->io.data, bit);
-    mmu_write_byte(cpu->memory, cpu->reg.hl, z);
+    u8 z = set_bit(cpu->memory->cpu_bus.data, bit);
+    sm83_write(cpu->memory, cpu->reg.hl, z);
 }
 void set_b_hl_m3(SM83 *cpu, Instruction *instr)
 {

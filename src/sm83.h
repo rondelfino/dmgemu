@@ -2,15 +2,56 @@
 #define SM83_H
 
 #include "common.h"
-#include "mmu.h"
+#include "idu.h"
+#include "memory.h"
 
-#define BYTE_REG_COUNT 8
-#define WORD_REG_COUNT 5
+#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+#define GB_BIG_ENDIAN
+#elif __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+#define GB_LITTLE_ENDIAN
+#else
+#error Unable to detect endianess
+#endif
 
-#define FLAG_C 0x10
-#define FLAG_H 0x20
-#define FLAG_N 0x40
-#define FLAG_Z 0x80
+#ifdef GB_BIG_ENDIAN
+#define GB_REGISTER_ORDER a, f, b, c, d, e, h, l
+#else
+#define GB_REGISTER_ORDER f, a, c, b, e, d, l, h
+#endif
+
+struct Instruction;
+
+enum
+{
+    REG8_F,
+    REG8_A,
+    REG8_C,
+    REG8_B,
+    REG8_E,
+    REG8_D,
+    REG8_L,
+    REG8_H,
+    REG8_COUNT
+};
+
+enum
+{
+    REG16_AF,
+    REG16_BC,
+    REG16_DE,
+    REG16_HL,
+    REG16_SP,
+    REG16_PC,
+    REG16_COUNT
+};
+
+enum
+{
+    CARRY_FLAG = 0x10,
+    HALF_CARRY_FLAG = 0x20,
+    SUBTRACT_FLAG = 0x40,
+    ZERO_FLAG = 0x80,
+};
 
 struct Flags
 {
@@ -21,12 +62,29 @@ struct Flags
     bool z : 1;      // Zero flag
 };
 
+typedef union
+{
+    u16 word_regs[REG16_COUNT];
+    struct
+    {
+        u16 af, bc, de, hl, sp, pc;
+    };
+    union
+    {
+        u8 byte_regs[REG8_COUNT];
+        struct
+        {
+            u8 BG_REGISTER_ORDER;
+        };
+    };
+} Registers;
+
 struct Register
 {
     union
     {
-        u16 word_regs[BYTE_REG_COUNT];
-        u8 byte_regs[WORD_REG_COUNT + 2]; // 2 padding bytes for sp
+        u16 word_regs[REG16_COUNT];
+        u8 byte_regs[REG8_COUNT];
         struct
         {
             union
@@ -88,38 +146,20 @@ enum IMEState
     Enabled
 };
 
-struct IDU
-{
-};
-
-struct Interrupts
-{
-};
-
-struct Instruction;
-
 struct SM83
 {
+    // Registers
     Register reg;
-    IDU idu;
-    MMU *memory;
-    Interrupts *interrupts;
-
+    // ISA
     Instruction *instructions;
+    // Memory
+    Memory *memory;
+    Bus *bus;
 
-    struct IO
-    {
-        enum State
-        {
-            Idle,
-            Read,
-            Write,
-        };
+    IMEState ime;
+    u8 interrupt_enable;
 
-        State state;
-        u8 data;
-    } io;
-
+    // Scratch
     struct
     {
         bool b;
@@ -133,8 +173,6 @@ struct SM83
     u32 clockm;
     u32 clockt;
     u32 cycles;
-
-    IMEState ime;
 };
 
 // enum ArgType
@@ -155,28 +193,6 @@ struct SM83
 //         u8 data;
 //     } arg;
 // };
-//
-
-enum Reg8
-{
-    REG8_F,
-    REG8_A,
-    REG8_C,
-    REG8_B,
-    REG8_E,
-    REG8_D,
-    REG8_L,
-    REG8_H,
-};
-
-enum Reg16
-{
-    REG16_AF,
-    REG16_BC,
-    REG16_DE,
-    REG16_HL,
-    REG16_SP,
-};
 
 struct Instruction
 {
@@ -185,13 +201,11 @@ struct Instruction
     std::vector<void (*)(SM83 *, Instruction *)> handlers;
     union
     {
-        Reg8 reg8;
-        Reg16 reg16;
+        u8 reg8;
+        u8 reg16;
         u8 data;
     } args[2];
     // Arg args[2];
-    u8 length;              // in bytes
-    std::vector<u8> cycles; // if applicable, 0th duration is when an action is taken
     u8 flags;
     u8 microop_index;
 };
@@ -233,10 +247,6 @@ void sm83_tick_t1(SM83 *cpu);
 void sm83_tick_t2(SM83 *cpu);
 void sm83_tick_t3(SM83 *cpu);
 void sm83_tick_t4(SM83 *cpu);
-void sm83_tick(SM83 *cpu);
-
-void idu_increment(u16 *data);
-void idu_decrement(u16 *data);
 
 /*********** Instructions ***********/
 /*
@@ -592,5 +602,4 @@ void set_b_r(SM83 *cpu, Instruction *instr);
 void set_b_hl_m1(SM83 *cpu, Instruction *instr);
 void set_b_hl_m2(SM83 *cpu, Instruction *instr);
 void set_b_hl_m3(SM83 *cpu, Instruction *instr);
-
 #endif

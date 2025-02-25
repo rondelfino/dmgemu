@@ -1,4 +1,4 @@
-#include "sm83.h"
+#include "gb.h"
 #include <chrono>
 #include <iostream>
 #include <stdio.h>
@@ -12,16 +12,6 @@ void create_log_file()
     }
     fclose(log);
 }
-
-struct DMGCore
-{
-    // CPU
-    SM83 cpu;
-
-    // Buses
-
-    MMU mmu;
-};
 
 bool read_file(u8 *memory, std::string filename)
 {
@@ -46,34 +36,37 @@ bool read_file(u8 *memory, std::string filename)
     return true;
 }
 
-bool load_bootrom(DMGCore *core, std::string filename)
+bool load_bootrom(Gameboy *gb, std::string filename)
 {
-    if (read_file(core->mmu.bootrom_memory, filename))
-    {
-        core->mmu.bootrom_enabled = true;
-        return true;
-    }
-
-    return false;
 }
 
-void load_rom(DMGCore *core, u8 *memory, char *filename)
+void load_rom(Gameboy *gb, char *filename)
 {
-    FILE *rom;
-    fopen_s(&rom, filename, "rb");
+    FILE *f;
+    fopen_s(&f, filename, "rb");
 
-    if (rom)
+    if (f)
     {
         /* Find the ROM file size */
-        fseek(rom, 0L, SEEK_END);
-        u64 rom_size = ftell(rom);
-        fseek(rom, 0L, SEEK_SET);
+        fseek(f, 0L, SEEK_END);
+        u64 rom_size = ftell(f);
+        gb->memory.rom_size = rom_size;
+        fseek(f, 0L, SEEK_SET);
+
+        if (gb->memory.rom)
+        {
+            free(gb->memory.rom);
+        }
 
         if (rom_size > 0)
         {
+            gb->memory.rom = (u8 *)malloc(gb->memory.rom_size);
+            memset(gb->memory.rom, 0xFF, gb->memory.rom_size);
             if (rom_size <= 0x10000)
             {
-                fread(memory + core->cpu.reg.pc, 1, rom_size, rom);
+                fread(gb->memory.rom + gb->cpu.reg.pc, 1, gb->memory.rom_size, f);
+                fseek(f, 0L, SEEK_SET);
+                fread(gb->memory.memory_map + gb->cpu.reg.pc, 1, gb->memory.rom_size, f);
             }
             else
             {
@@ -88,7 +81,7 @@ void load_rom(DMGCore *core, u8 *memory, char *filename)
             printf("Error: ROM file is empty.\n");
             exit(EXIT_FAILURE);
         }
-        fclose(rom);
+        fclose(f);
     }
     else
     {
@@ -98,61 +91,43 @@ void load_rom(DMGCore *core, u8 *memory, char *filename)
     }
 }
 
-void dmg_init(DMGCore *core)
+void dmg_tick_t1(Gameboy *gb)
 {
-    core->cpu.reg = {};
-    core->cpu.reg.a = 0x01;
-    core->cpu.reg.c = 0x13;
-    core->cpu.reg.e = 0xD8;
-    core->cpu.reg.h = 0x01;
-    core->cpu.reg.l = 0x4D;
-    core->cpu.reg.pc = 0x100;
-    core->cpu.reg.sp = 0xFFFE;
-    core->cpu.reg.flags.c = 1;
-    core->cpu.reg.flags.h = 1;
-    core->cpu.reg.flags.z = 1;
-    core->cpu.reg.ir = mmu_read_byte(&core->mmu, core->cpu.reg.pc, false);
-    // core->cpu.instructions = instructions;
+    sm83_tick_t1(&gb->cpu);
 }
 
-void dmg_tick_t1(DMGCore *core)
+void dmg_tick_t2(Gameboy *gb)
 {
-    sm83_tick_t1(&core->cpu);
+    sm83_tick_t2(&gb->cpu);
 }
 
-void dmg_tick_t2(DMGCore *core)
+void dmg_tick_t3(Gameboy *gb)
 {
-    sm83_tick_t2(&core->cpu);
+    sm83_tick_t3(&gb->cpu);
 }
 
-void dmg_tick_t3(DMGCore *core)
+void dmg_tick_t4(Gameboy *gb)
 {
-    sm83_tick_t3(&core->cpu);
+    sm83_tick_t4(&gb->cpu);
 }
 
-void dmg_tick_t4(DMGCore *core)
+void dmg_cycle(Gameboy *gb)
 {
-    sm83_tick_t4(&core->cpu);
-}
-
-void dmg_cycle(DMGCore *core)
-{
-    dmg_tick_t1(core);
-    dmg_tick_t2(core);
-    dmg_tick_t3(core);
-    dmg_tick_t4(core);
+    dmg_tick_t1(gb);
+    dmg_tick_t2(gb);
+    dmg_tick_t3(gb);
+    dmg_tick_t4(gb);
 }
 
 int main(int argv, char **argc)
 {
-    DMGCore core = {};
-    core.cpu.memory = &core.mmu;
+    Gameboy gb = {};
 
     char *bootrom = "../roms/dmg_boot.bin";
-    char *rom_path = "R:/dmg/tests/roms/blargg/cpu_instrs/individual/11-op a,(hl).gb";
-    // load_bootrom(&core, bootrom);
-    load_rom(&core, core.mmu.memory_map, rom_path);
-    dmg_init(&core);
+    char *rom_path = "R:/dmg/tests/roms/blargg/cpu_instrs/individual/03-op sp,hl.gb";
+
+    load_rom(&gb, rom_path);
+    gb_init(&gb);
 
     create_log_file();
 
@@ -167,11 +142,11 @@ int main(int argv, char **argc)
     //         }
     //     }
     //
-    fetch(&core.cpu);
+    // fetch(&gb.cpu);
     // for (u64 tick = 0; tick < CLOCK_FREQ; tick += 4)
     for (;;)
     {
-        dmg_cycle(&core);
+        dmg_cycle(&gb);
     }
     // }
 
