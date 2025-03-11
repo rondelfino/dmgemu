@@ -68,9 +68,26 @@ static u8 read_high_memory(Memory *memory, u16 address)
     {
         return 0x90;
     }
-    else if (address < 0xFF80)
+
+    if (address < 0xFF80)
     {
         ASSERT((address & 0x00FF) < 0x80);
+
+        switch (address & 0xFF)
+        {
+        case IO_IF:
+            // TODO: |= 0xE1
+            return memory->io_registers[IO_IF];
+        case IO_TAC:
+            return memory->io_registers[IO_TAC] | 0xF8;
+        case IO_TMA:
+            return memory->io_registers[address & 0xFF];
+        case IO_TIMA:
+            return memory->io_registers[IO_TIMA];
+        case IO_DIV:
+            return memory->div_counter >> 8;
+        }
+
         return memory->io_registers[address & 0x00FF];
     }
     ASSERT(((address & 0x00FF) % 0x0080) < (0xFFFF - 0xFF80));
@@ -91,9 +108,10 @@ u8 gb_read_memory(Memory *memory, u16 address)
     u8 data = read_memory_map[address >> 12](memory, address);
     if (address >= 0x8000 && address != 0xFF44)
     {
-        ASSERT(data == memory->memory_map[address]);
+        // ASSERT(data == memory->memory_map[address]);
     }
 
+    memory->data_bus = data;
     return data;
 }
 
@@ -157,6 +175,22 @@ static void write_high_memory(Memory *memory, u16 address, u8 value)
     }
     else if (address < 0xFF80)
     {
+        switch (address & 0xFF)
+        {
+        case IO_IF:
+            memory->io_registers[address & 0xFF] = value;
+            return;
+        case IO_DIV:
+            memory->io_registers[IO_DIV] = 0;
+            return;
+        case IO_TIMA:
+
+            return;
+        case IO_TAC:
+            memory->io_registers[IO_TAC] = value;
+            return;
+        }
+
         ASSERT((address & 0x00FF) < 0x80);
         memory->io_registers[address & 0x00FF] = value;
     }
@@ -180,22 +214,5 @@ void gb_write_memory(Memory *memory, u16 address, u8 value)
 {
     write_memory_map[address >> 12](memory, address, value);
 
-    // TODO: DEBUG only
-    if (address == 0xFF02)
-    {
-        memory->memory_map[(address)] = value;
-
-        if (value == 0x81)
-        {
-            char c = memory->memory_map[(0xff01)];
-
-            // printf("%c", c);
-
-            memory->memory_map[(0xff02)] = 0;
-        }
-    }
-    else
-    {
-        memory->memory_map[address] = value;
-    }
+    memory->data_bus = value;
 }

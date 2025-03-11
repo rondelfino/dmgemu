@@ -1,22 +1,20 @@
 #include "gb.h"
-#include <cstring>
+#include "timers.h"
 
 void gb_init(Gameboy *gb)
 {
     // memset(gb, 0, sizeof(*gb));
 
-    gb->memory.ext_bus = {};
-    gb->memory.cpu_bus = {};
-    gb->memory.oam_bus = {};
-    gb->memory.vram_bus = {};
-
-    gb->cpu.bus = &gb->memory.cpu_bus;
+    // gb->cpu.bus = &gb->cpu_bus;
     gb->cpu.memory = &gb->memory;
 
     gb->memory.wram = (u8 *)malloc(gb->memory.wram_size = 0x2000);
     gb->memory.vram = (u8 *)malloc(gb->memory.vram_size = 0x2000);
     memset(gb->memory.wram, 0, gb->memory.wram_size);
     memset(gb->memory.vram, 0, gb->memory.vram_size);
+
+    gb->memory.data_bus = 0;
+    gb->memory.div_counter = 0;
 
     // TODO: DEBUG build only
     gb->memory.boot_rom_finished = true;
@@ -32,8 +30,13 @@ void gb_init(Gameboy *gb)
     gb->cpu.reg.flags.c = 1;
     gb->cpu.reg.flags.h = 1;
     gb->cpu.reg.flags.z = 1;
-    gb->cpu.reg.ir = gb_read_memory(&gb->memory, gb->cpu.reg.pc);
     gb->cpu.instructions = instructions;
+    gb->cpu.instruction.microop_index = 0;
+    gb->cpu.ime = IMEState::Disabled;
+
+    gb->memory.div_counter = 0xAB;
+    gb->memory.io_registers[IO_TAC] = 0xF8;
+    gb->memory.io_registers[IO_IF] = 0xE1;
 }
 
 void gb_free(Gameboy *gb)
@@ -50,4 +53,39 @@ void gb_free(Gameboy *gb)
     {
         free(gb->memory.vram);
     }
+}
+
+static void gb_tick_t0(Gameboy *gb)
+{
+    sm83_tick_t0(&gb->cpu);
+    gb->cycles_elapsed++;
+}
+
+static void gb_tick_t1(Gameboy *gb)
+{
+    sm83_tick_t1(&gb->cpu);
+    gb->cycles_elapsed++;
+}
+
+static void gb_tick_t2(Gameboy *gb)
+{
+    sm83_tick_t2(&gb->cpu);
+    gb->cycles_elapsed++;
+}
+
+static void gb_tick_t3(Gameboy *gb)
+{
+    sm83_tick_t3(&gb->cpu);
+    timers_tick(gb);
+    gb->cycles_elapsed++;
+}
+
+u64 gb_run(Gameboy *gb)
+{
+    gb_tick_t0(gb);
+    gb_tick_t1(gb);
+    gb_tick_t2(gb);
+    gb_tick_t3(gb);
+
+    return gb->cycles_elapsed;
 }

@@ -62,7 +62,7 @@ void load_rom(Gameboy *gb, char *filename)
         {
             gb->memory.rom = (u8 *)malloc(gb->memory.rom_size);
             memset(gb->memory.rom, 0xFF, gb->memory.rom_size);
-            if (rom_size <= 0x10000)
+            if (rom_size < 0x10000)
             {
                 fread(gb->memory.rom + gb->cpu.reg.pc, 1, gb->memory.rom_size, f);
                 fseek(f, 0L, SEEK_SET);
@@ -91,43 +91,17 @@ void load_rom(Gameboy *gb, char *filename)
     }
 }
 
-void dmg_tick_t1(Gameboy *gb)
-{
-    sm83_tick_t1(&gb->cpu);
-}
-
-void dmg_tick_t2(Gameboy *gb)
-{
-    sm83_tick_t2(&gb->cpu);
-}
-
-void dmg_tick_t3(Gameboy *gb)
-{
-    sm83_tick_t3(&gb->cpu);
-}
-
-void dmg_tick_t4(Gameboy *gb)
-{
-    sm83_tick_t4(&gb->cpu);
-}
-
-void dmg_cycle(Gameboy *gb)
-{
-    dmg_tick_t1(gb);
-    dmg_tick_t2(gb);
-    dmg_tick_t3(gb);
-    dmg_tick_t4(gb);
-}
-
 int main(int argv, char **argc)
 {
     Gameboy gb = {};
 
     char *bootrom = "../roms/dmg_boot.bin";
-    char *rom_path = "R:/dmg/tests/roms/blargg/cpu_instrs/individual/03-op sp,hl.gb";
+    char *rom_path = "R:/dmg/tests/roms/blargg/cpu_instrs/individual/02-interrupts.gb";
 
-    load_rom(&gb, rom_path);
     gb_init(&gb);
+    gb.cpu.reg.pc = 0x00;
+    load_rom(&gb, rom_path);
+    gb.cpu.reg.pc = 0x100;
 
     create_log_file();
 
@@ -144,11 +118,11 @@ int main(int argv, char **argc)
     //
     // fetch(&gb.cpu);
     // for (u64 tick = 0; tick < CLOCK_FREQ; tick += 4)
+    u64 cycles = 0;
     for (;;)
     {
-        dmg_cycle(&gb);
+        cycles += gb_run(&gb);
     }
-    // }
 
     std::cout << '\n';
     return 0;

@@ -7,7 +7,11 @@ struct Gameboy
 {
     SM83 cpu;
     Memory memory;
+    // APU apu;
+
+    u64 cycles_elapsed;
 };
 
 void gb_init(Gameboy *gb);
 void gb_free(Gameboy *gb);
+u64 gb_run(Gameboy *gb);

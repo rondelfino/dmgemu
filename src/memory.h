@@ -15,6 +15,13 @@ struct Bus
     // Memory *memory;
 };
 
+enum TimaState
+{
+    TIMA_RUNNING,
+    TIMA_RELOADING,
+    TIMA_RELOADED,
+};
+
 enum BusType
 {
     BUS_EXT,
@@ -46,17 +53,19 @@ struct Memory
     u8 io_registers[0x80];
     u8 hram[0xFFFF - 0xFF80];
 
+    TimaState tima_state;
+
     // Buses
-    Bus ext_bus;
-    Bus cpu_bus;
-    Bus oam_bus;
-    Bus vram_bus;
+    u8 data_bus;
+    u16 address_bus;
 
     // IE
     u8 interrupt_enable;
 
     u8 boot_rom[0x100];
     bool boot_rom_finished;
+
+    u16 div_counter;
 };
 
 // TODO: Refactor functions to check for bus type to prevent conflicts
