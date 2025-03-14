@@ -59,11 +59,6 @@ static u8 read_wram(Memory *memory, u16 address)
 
 static u8 read_high_memory(Memory *memory, u16 address)
 {
-    if (address == 0xFFFF)
-    {
-        return memory->interrupt_enable;
-    }
-
     if (address == 0xFF44)
     {
         return 0x90;
@@ -76,20 +71,29 @@ static u8 read_high_memory(Memory *memory, u16 address)
         switch (address & 0xFF)
         {
         case IO_IF:
-            // TODO: |= 0xE1
-            return memory->io_registers[IO_IF];
+            return memory->io_registers[IO_IF] | 0xE0;
         case IO_TAC:
             return memory->io_registers[IO_TAC] | 0xF8;
         case IO_TMA:
-            return memory->io_registers[address & 0xFF];
+            return memory->io_registers[IO_TMA];
         case IO_TIMA:
+            if (memory->tima_state == TIMA_RELOADING)
+            {
+                return 0;
+            }
             return memory->io_registers[IO_TIMA];
         case IO_DIV:
             return memory->div_counter >> 8;
         }
 
-        return memory->io_registers[address & 0x00FF];
+        return memory->io_registers[address & 0xFF];
     }
+
+    if (address == 0xFFFF)
+    {
+        return memory->interrupt_enable;
+    }
+
     ASSERT(((address & 0x00FF) % 0x0080) < (0xFFFF - 0xFF80));
     return memory->hram[(address & 0x00FF) % 0x0080];
 }
@@ -178,13 +182,23 @@ static void write_high_memory(Memory *memory, u16 address, u8 value)
         switch (address & 0xFF)
         {
         case IO_IF:
-            memory->io_registers[address & 0xFF] = value;
+            memory->io_registers[IO_IF] = value;
             return;
         case IO_DIV:
             memory->io_registers[IO_DIV] = 0;
             return;
+        case IO_TMA:
+            memory->io_registers[IO_TMA] = value;
+            if (memory->tima_state != TIMA_RUNNING)
+            {
+                memory->io_registers[IO_TIMA] = value;
+            }
+            return;
         case IO_TIMA:
-
+            if (memory->tima_state != TIMA_RELOADED)
+            {
+                memory->io_registers[IO_TIMA] = value;
+            }
             return;
         case IO_TAC:
             memory->io_registers[IO_TAC] = value;

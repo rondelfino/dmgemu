@@ -1,5 +1,4 @@
 #include "gb.h"
-#include <chrono>
 #include <iostream>
 #include <stdio.h>
 #include <stdlib.h>
@@ -96,7 +95,7 @@ int main(int argv, char **argc)
     Gameboy gb = {};
 
     char *bootrom = "../roms/dmg_boot.bin";
-    char *rom_path = "R:/dmg/tests/roms/blargg/cpu_instrs/individual/02-interrupts.gb";
+    char *rom_path = "R:/dmg/tests/roms/blargg/instr_timing/instr_timing.gb";
 
     gb_init(&gb);
     gb.cpu.reg.pc = 0x00;
@@ -105,19 +104,6 @@ int main(int argv, char **argc)
 
     create_log_file();
 
-    auto start = std::chrono::high_resolution_clock::now();
-    // while (1)
-    // {
-    //     auto elapsed_ms = std::chrono::high_resolution_clock::now() - start;
-    //     if (elapsed_ms.count() < CLOCK_FREQ)
-    //     {
-    //         while (elapsed_ms.count() < CLOCK_FREQ)
-    //         {
-    //         }
-    //     }
-    //
-    // fetch(&gb.cpu);
-    // for (u64 tick = 0; tick < CLOCK_FREQ; tick += 4)
     u64 cycles = 0;
     for (;;)
     {

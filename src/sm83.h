@@ -5,20 +5,6 @@
 #include "idu.h"
 #include "memory.h"
 
-#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-#define GB_BIG_ENDIAN
-#elif __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
-#define GB_LITTLE_ENDIAN
-#else
-#error Unable to detect endianess
-#endif
-
-#ifdef GB_BIG_ENDIAN
-#define GB_REGISTER_ORDER a, f, b, c, d, e, h, l
-#else
-#define GB_REGISTER_ORDER f, a, c, b, e, d, l, h
-#endif
-
 enum
 {
     REG8_F,
@@ -152,6 +138,13 @@ struct Instruction
     InstructionArg args[2];
 };
 
+enum IOState
+{
+    Idle,
+    Read,
+    Write
+};
+
 struct SM83
 {
     // Registers
@@ -166,6 +159,9 @@ struct SM83
         u8 microop_index;
         InstructionArg *args;
     } instruction;
+
+    bool fetching;
+    IOState io_state;
 
     // Memory
     Memory *memory;
@@ -246,10 +242,14 @@ void ld_rr_nn_m0(SM83 *cpu, InstructionArg *args);
 void ld_rr_nn_m1(SM83 *cpu, InstructionArg *args);
 void ld_rr_nn_m2(SM83 *cpu, InstructionArg *args);
 
-void ld_bc_a(SM83 *cpu, InstructionArg *args);
-void ld_de_a(SM83 *cpu, InstructionArg *args);
-void ldi_hl_a(SM83 *cpu, InstructionArg *args);
-void ldd_hl_a(SM83 *cpu, InstructionArg *args);
+void ld_bc_a_m0(SM83 *cpu, InstructionArg *args);
+void ld_bc_a_m1(SM83 *cpu, InstructionArg *args);
+void ld_de_a_m0(SM83 *cpu, InstructionArg *args);
+void ld_de_a_m1(SM83 *cpu, InstructionArg *args);
+void ldi_hl_a_m0(SM83 *cpu, InstructionArg *args);
+void ldi_hl_a_m1(SM83 *cpu, InstructionArg *args);
+void ldd_hl_a_m0(SM83 *cpu, InstructionArg *args);
+void ldd_hl_a_m1(SM83 *cpu, InstructionArg *args);
 
 void ldi_a_hl_m0(SM83 *cpu, InstructionArg *args);
 void ldi_a_hl_m1(SM83 *cpu, InstructionArg *args);
@@ -263,7 +263,8 @@ void ld_nn_sp_m2(SM83 *cpu, InstructionArg *args);
 void ld_nn_sp_m3(SM83 *cpu, InstructionArg *args);
 void ld_nn_sp_m4(SM83 *cpu, InstructionArg *args);
 
-void ld_sp_hl(SM83 *cpu, InstructionArg *args);
+void ld_sp_hl_m0(SM83 *cpu, InstructionArg *args);
+void ld_sp_hl_m1(SM83 *cpu, InstructionArg *args);
 
 void ld_hl_spe_m0(SM83 *cpu, InstructionArg *args);
 void ld_hl_spe_m1(SM83 *cpu, InstructionArg *args);
@@ -272,6 +273,7 @@ void ld_hl_spe_m2(SM83 *cpu, InstructionArg *args);
 void ld_nn_a_m0(SM83 *cpu, InstructionArg *args);
 void ld_nn_a_m1(SM83 *cpu, InstructionArg *args);
 void ld_nn_a_m2(SM83 *cpu, InstructionArg *args);
+void ld_nn_a_m3(SM83 *cpu, InstructionArg *args);
 
 void ld_a_bc_m0(SM83 *cpu, InstructionArg *args);
 void ld_a_bc_m1(SM83 *cpu, InstructionArg *args);

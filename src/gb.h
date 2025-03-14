@@ -10,6 +10,8 @@ struct Gameboy
     // APU apu;
 
     u64 cycles_elapsed;
+
+    bool previous_and_result;
 };
 
 void gb_init(Gameboy *gb);

@@ -1,4 +1,5 @@
 #include "gb.h"
+#include "memory.h"
 #include "timers.h"
 
 void gb_init(Gameboy *gb)
@@ -14,6 +15,7 @@ void gb_init(Gameboy *gb)
     memset(gb->memory.vram, 0, gb->memory.vram_size);
 
     gb->memory.data_bus = 0;
+    gb->memory.address_bus = 0;
     gb->memory.div_counter = 0;
 
     // TODO: DEBUG build only
@@ -34,9 +36,14 @@ void gb_init(Gameboy *gb)
     gb->cpu.instruction.microop_index = 0;
     gb->cpu.ime = IMEState::Disabled;
 
-    gb->memory.div_counter = 0xAB;
+    gb->cpu.fetching = false;
+    gb->cpu.io_state = IOState::Idle;
+
+    gb->memory.div_counter = 0xABCC;
     gb->memory.io_registers[IO_TAC] = 0xF8;
     gb->memory.io_registers[IO_IF] = 0xE1;
+
+    gb->previous_and_result = 0;
 }
 
 void gb_free(Gameboy *gb)
@@ -58,34 +65,40 @@ void gb_free(Gameboy *gb)
 static void gb_tick_t0(Gameboy *gb)
 {
     sm83_tick_t0(&gb->cpu);
-    gb->cycles_elapsed++;
+    timers_tick(gb);
 }
 
 static void gb_tick_t1(Gameboy *gb)
 {
     sm83_tick_t1(&gb->cpu);
-    gb->cycles_elapsed++;
+    timers_tick(gb);
 }
 
 static void gb_tick_t2(Gameboy *gb)
 {
     sm83_tick_t2(&gb->cpu);
-    gb->cycles_elapsed++;
+    timers_tick(gb);
 }
 
 static void gb_tick_t3(Gameboy *gb)
 {
     sm83_tick_t3(&gb->cpu);
     timers_tick(gb);
-    gb->cycles_elapsed++;
 }
 
 u64 gb_run(Gameboy *gb)
 {
     gb_tick_t0(gb);
+    gb->cycles_elapsed++;
+
     gb_tick_t1(gb);
+    gb->cycles_elapsed++;
+
     gb_tick_t2(gb);
+    gb->cycles_elapsed++;
+
     gb_tick_t3(gb);
+    gb->cycles_elapsed++;
 
     return gb->cycles_elapsed;
 }
