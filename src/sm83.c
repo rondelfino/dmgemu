@@ -22,9 +22,9 @@
 //     fclose(log);
 // }
 
+
 void sm83_reset(SM83 *cpu)
 {
-    *cpu = {};
 }
 
 static u8 rotate_left(SM83 *cpu, u8 value)
@@ -135,18 +135,18 @@ static u8 swap(SM83 *cpu, u8 value)
     return value;
 }
 
-// static u8 sm83_read_request(SM83 *cpu, u16 address)
-// {
-//     u8 data = gb_read_memory(cpu->memory, address);
+static u8 sm83_read(SM83 *cpu, u16 address)
+{
+    u8 data = gb_read_memory(cpu->memory, address);
 
-//     return data;
-// }
+    return data;
+}
 
 static void sm83_read_request(SM83 *cpu, u16 address)
 {
-    if (cpu->io_state == IOState::Idle)
+    if (cpu->io_state == Idle)
     {
-        cpu->io_state = IOState::Read;
+        cpu->io_state = Read;
         cpu->memory->address_bus = address;
     }
     // gb_read_request(cpu->memory, address, SM83_CPU);
@@ -163,23 +163,22 @@ static void sm83_write(SM83 *cpu, u16 address, u8 value)
 
 static void sm83_flush_read(SM83 *cpu)
 {
-    if (cpu->io_state == IOState::Read)
+    if (cpu->io_state == Read)
     {
         cpu->memory->data_bus = gb_read_memory(cpu->memory, cpu->memory->address_bus);
-        cpu->io_state = IOState::Idle;
+        cpu->io_state = Idle;
     }
 }
 
 static void sm83_flush_write(SM83 *cpu)
 {
-    if (cpu->io_state == IOState::Write)
+    if (cpu->io_state == Write)
     {
         gb_write_memory(cpu->memory, cpu->memory->address_bus, cpu->memory->data_bus);
-        cpu->io_state = IOState::Idle;
+        cpu->io_state = Idle;
     }
 }
 
-/*********** Cycle ***********/
 static void fetch(SM83 *cpu)
 {
     u8 previous_opcode = cpu->reg.ir;
@@ -189,14 +188,9 @@ static void fetch(SM83 *cpu)
     cpu->instructions = instructions;
     sm83_read_request(cpu, cpu->reg.pc);
 
-    // if (previous_opcode != 0xCB && !(cpu->interrupt.state == InterruptState::Serviced))
-    // {
-    //     log_cpu_state(cpu);
-    // }
-
-    if (cpu->interrupt.state == InterruptState::Serviced)
+    if (cpu->interrupt.state == Serviced)
     {
-        cpu->interrupt.state = InterruptState::None;
+        cpu->interrupt.state = None;
     }
 
     idu_increment(&cpu->reg.pc);
@@ -212,7 +206,7 @@ static void dummy_fetch(SM83 *cpu)
 
 static void service_interrupt(SM83 *cpu)
 {
-    cpu->interrupt.state = InterruptState::Servicing;
+    cpu->interrupt.state = Servicing;
     cpu->instruction.microop_index = 0;
     cpu->instructions = isr;
 }
@@ -224,12 +218,12 @@ static inline u8 get_pending_interrupts(SM83 *cpu)
 
 static void check_interrupt(SM83 *cpu)
 {
-    if (cpu->interrupt.state == InterruptState::None)
+    if (cpu->interrupt.state == None)
     {
         u8 pending_interrupts = 0;
         if ((pending_interrupts = get_pending_interrupts(cpu)))
         {
-            cpu->interrupt.state = InterruptState::Pending;
+            cpu->interrupt.state = Pending;
         }
     }
 }
@@ -237,7 +231,7 @@ static void check_interrupt(SM83 *cpu)
 static void sm83_tick(SM83 *cpu)
 {
     bool temp_halt = cpu->halted;
-    if (cpu->interrupt.state == InterruptState::Pending && cpu->instruction.microop_index == 0)
+    if (cpu->interrupt.state == Pending && cpu->instruction.microop_index == 0)
     {
         // Handle interrupt at beginning of instruction
         // TODO: This won't work for a CB instruction, because cb_fetch sets microop_index to 0. But we are not at the
@@ -245,14 +239,14 @@ static void sm83_tick(SM83 *cpu)
 
         // Wakeup as soon as interrupt becomes pending
         cpu->halted = false;
-        if (cpu->ime == IMEState::Enabled)
+        if (cpu->ime == Enabled)
         {
-            cpu->interrupt.state = InterruptState::Servicing;
+            cpu->interrupt.state = Servicing;
             service_interrupt(cpu);
         }
         else
         {
-            cpu->interrupt.state = InterruptState::None;
+            cpu->interrupt.state = None;
         }
     }
 
@@ -272,7 +266,7 @@ static void sm83_tick(SM83 *cpu)
 
     if (!temp_halt)
     {
-        u8 opcode = cpu->interrupt.state == InterruptState::Servicing ? 0 : cpu->reg.ir;
+        u8 opcode = cpu->interrupt.state == Servicing ? 0 : cpu->reg.ir;
 
         u8 microop_index = cpu->instruction.microop_index;
         cpu->instruction.microop_index++;
@@ -282,9 +276,9 @@ static void sm83_tick(SM83 *cpu)
     }
 
     // NOTE: Enabling IME is delayed by one instruction; only enable if requested and at the end of an instruction.
-    if (cpu->instruction.microop_index == 0 && cpu->ime == IMEState::Requested)
+    if (cpu->instruction.microop_index == 0 && cpu->ime == Requested)
     {
-        cpu->ime = IMEState::Enabled;
+        cpu->ime = Enabled;
     }
 }
 
@@ -348,8 +342,8 @@ void isr_m3(SM83 *cpu, InstructionArg *args)
 }
 void isr_m4(SM83 *cpu, InstructionArg *args)
 {
-    cpu->ime = IMEState::Disabled;
-    cpu->interrupt.state = InterruptState::Serviced;
+    cpu->ime = Disabled;
+    cpu->interrupt.state = Serviced;
     fetch(cpu);
 }
 
@@ -369,7 +363,7 @@ void halt(SM83 *cpu, InstructionArg *args)
 
     dummy_fetch(cpu);
 
-    if (!cpu->halted && cpu->ime == IMEState::Disabled)
+    if (!cpu->halted && cpu->ime == Disabled)
     {
         // TODO: Handle halt bug?
     }
@@ -382,15 +376,15 @@ void halt(SM83 *cpu, InstructionArg *args)
 
 void di(SM83 *cpu, InstructionArg *args)
 {
-    cpu->ime = IMEState::Disabled;
+    cpu->ime = Disabled;
     fetch(cpu);
 }
 
 void ei(SM83 *cpu, InstructionArg *args)
 {
-    if (cpu->ime == IMEState::Disabled)
+    if (cpu->ime == Disabled)
     {
-        cpu->ime = IMEState::Requested;
+        cpu->ime = Requested;
     }
     fetch(cpu);
 }
@@ -577,6 +571,7 @@ void ld_a_bc_m1(SM83 *cpu, InstructionArg *args)
 
 void ld_a_de_m0(SM83 *cpu, InstructionArg *args)
 {
+    sm83_read_request(cpu, cpu->reg.de);
 }
 void ld_a_de_m1(SM83 *cpu, InstructionArg *args)
 {
@@ -1656,7 +1651,7 @@ void reti_m1(SM83 *cpu, InstructionArg *args)
 void reti_m2(SM83 *cpu, InstructionArg *args)
 {
     cpu->reg.pc = unsigned_16(cpu->memory->data_bus, cpu->lsb);
-    cpu->ime = IMEState::Requested;
+    cpu->ime = Requested;
 }
 void reti_m3(SM83 *cpu, InstructionArg *args)
 {

@@ -1,5 +1,4 @@
 #include "timers.h"
-#include "gb.h"
 
 static const u16 TAC_TRIGGER_BITS[] = {512, 8, 32, 128};
 

@@ -1,4 +1,5 @@
 #include "memory.h"
+#include <stdio.h>
 
 typedef u8 read_function(Memory *memory, u16 address);
 typedef void write_function(Memory *memory, u16 address, u8 value);

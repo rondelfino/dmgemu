@@ -3,7 +3,7 @@
 #include "memory.h"
 #include "sm83.h"
 
-struct Gameboy
+typedef struct
 {
     SM83 cpu;
     Memory memory;
@@ -12,7 +12,7 @@ struct Gameboy
     u64 cycles_elapsed;
 
     bool previous_and_result;
-};
+} Gameboy;
 
 void gb_init(Gameboy *gb);
 void gb_free(Gameboy *gb);

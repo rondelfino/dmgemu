@@ -2,10 +2,10 @@
 
 static void increment(u16 *data, s8 value)
 {
-    if (*data >= OAM_START && *data <= 0xFFFF)
-    {
+    // if (*data >= OAM_START && *data <= 0xFFFF)
+    // {
         // TODO: Handle OAM bug
-    }
+    // }
 
     (*data) += value;
 }

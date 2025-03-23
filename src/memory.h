@@ -15,22 +15,22 @@ struct Bus
     // Memory *memory;
 };
 
-enum TimaState
+typedef enum
 {
     TIMA_RUNNING,
     TIMA_RELOADING,
-    TIMA_RELOADED,
-};
+    TIMA_RELOADED
+} TimaState;
 
-enum BusType
+typedef enum
 {
     BUS_EXT,
     BUS_CPU,
     BUS_OAM,
-    BUS_VRAM,
-};
+    BUS_VRAM
+} BusType;
 
-struct Memory
+typedef struct
 {
     u8 memory_map[0xFFFF];
 
@@ -53,7 +53,7 @@ struct Memory
     u8 io_registers[0x80];
     u8 hram[0xFFFF - 0xFF80];
 
-    TimaState tima_state;
+    TimaState tima_state; // NOTE: After TIMA overflows, it takes 1 mcycle before it is reloaded.
 
     // Buses
     u8 data_bus;
@@ -66,7 +66,7 @@ struct Memory
     bool boot_rom_finished;
 
     u16 div_counter;
-};
+} Memory;
 
 // TODO: Refactor functions to check for bus type to prevent conflicts
 u8 gb_read_memory(Memory *memory, u16 address);

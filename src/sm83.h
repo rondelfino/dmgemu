@@ -2,8 +2,9 @@
 #define SM83_H
 
 #include "common.h"
-#include "idu.h"
 #include "memory.h"
+#include "idu.h"
+#include "instructions.h"
 
 enum
 {
@@ -34,27 +35,27 @@ enum
     CARRY_FLAG = 0x10,
     HALF_CARRY_FLAG = 0x20,
     SUBTRACT_FLAG = 0x40,
-    ZERO_FLAG = 0x80,
+    ZERO_FLAG = 0x80
 };
 
-enum InterruptState
+typedef enum
 {
     None,
     Pending,
     Servicing,
-    Serviced,
-};
+    Serviced
+} InterruptState;
 
-struct Flags
+typedef struct
 {
     u8 reserved : 4; // Unused bits (always 0)
     bool c : 1;      // Carry flag
     bool h : 1;      // Half-carry flag
     bool n : 1;      // Subtract flag
     bool z : 1;      // Zero flag
-};
+} Flags;
 
-struct Register
+typedef struct
 {
     union
     {
@@ -111,41 +112,23 @@ struct Register
 
     u16 pc;
     u8 ir; // Instruction register
-};
+} Register;
 
-enum IMEState
+typedef enum
 {
     Disabled,
     Requested,
     Enabled
-};
+} IMEState;
 
-union InstructionArg
-{
-    u8 reg8;
-    u8 reg16;
-    u8 data;
-    u8 flags;
-};
-
-struct Instruction;
-struct SM83;
-
-typedef void (*MicroOperation)(SM83 *cpu, InstructionArg *args);
-struct Instruction
-{
-    MicroOperation microops[6];
-    InstructionArg args[2];
-};
-
-enum IOState
+typedef enum
 {
     Idle,
     Read,
     Write
-};
+} IOState;
 
-struct SM83
+typedef struct SM83
 {
     // Registers
     Register reg;
@@ -188,11 +171,7 @@ struct SM83
     u32 clockm;
     u32 clockt;
     u32 cycles;
-};
-
-extern Instruction instructions[];
-extern Instruction cb_instructions[];
-extern Instruction isr[];
+} SM83;
 
 static inline u8 reset_bit(u8 value, u8 bit)
 {

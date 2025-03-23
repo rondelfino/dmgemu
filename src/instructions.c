@@ -1,3 +1,4 @@
+#include "instructions.h"
 #include "sm83.h"
 
 // clang-format off

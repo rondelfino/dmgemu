@@ -1,14 +1,26 @@
-#ifndef PPU_H
-#define PPU_H
+#pragma once
 
 #include "common.h"
-#include "mmu.h"
 
-struct PPU
+typedef struct
 {
-    MMU *memory;
-};
+    struct color
+    {
+        u8 r, g, b;
+    } colors[5];
+} GBPalette;
 
-void ppu_tick(PPU *ppu);
+extern const GBPalette PALETTE_GREY;
+extern const GBPalette PALETTE_DMG;
 
-#endif
+typedef struct
+{
+    GBPalette palette;
+} LCD;
+
+typedef struct
+{
+
+} PPU;
+
+void lcd_set_palette(LCD *lcd, const GBPalette *palette);

@@ -1,41 +1,9 @@
 #include "gb.h"
-#include <iostream>
+#include "SDL3/SDL.h"
+#include "SDL3/SDL_main.h"
 #include <stdio.h>
-#include <stdlib.h>
 
-void create_log_file()
-{
-    FILE *log = fopen("cpu_log.txt", "w");
-    if (!log)
-    {
-    }
-    fclose(log);
-}
-
-bool read_file(u8 *memory, std::string filename)
-{
-    std::ifstream file(filename, std::ios_base::binary);
-
-    // Determine the length of the file by seeking
-    // to the end of the file, reading the value of the
-    // position indicator, and then seeking back to the beginning.
-    file.seekg(0, std::ios_base::end);
-    u16 length = file.tellg();
-    if (!length)
-    {
-        return false;
-    }
-    file.seekg(0, std::ios_base::beg);
-
-    // Make a buffer of the exact size of the file and read the data into it.
-    file.read(reinterpret_cast<char *>(memory), length);
-
-    file.close();
-
-    return true;
-}
-
-bool load_bootrom(Gameboy *gb, std::string filename)
+bool load_bootrom(Gameboy *gb, char *filename)
 {
 }
 
@@ -95,14 +63,12 @@ int main(int argv, char **argc)
     Gameboy gb = {};
 
     char *bootrom = "../roms/dmg_boot.bin";
-    char *rom_path = "R:/dmg/tests/roms/blargg/instr_timing/instr_timing.gb";
+    char *rom_path = "R:/dmg/tests/roms/blargg/mem_timing/individual/01-read_timing.gb";
 
     gb_init(&gb);
     gb.cpu.reg.pc = 0x00;
     load_rom(&gb, rom_path);
     gb.cpu.reg.pc = 0x100;
-
-    create_log_file();
 
     u64 cycles = 0;
     for (;;)
@@ -110,6 +76,5 @@ int main(int argv, char **argc)
         cycles += gb_run(&gb);
     }
 
-    std::cout << '\n';
     return 0;
 }

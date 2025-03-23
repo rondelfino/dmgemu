@@ -1,5 +1,4 @@
 #include "gb.h"
-#include "memory.h"
 #include "timers.h"
 
 void gb_init(Gameboy *gb)
@@ -21,7 +20,8 @@ void gb_init(Gameboy *gb)
     // TODO: DEBUG build only
     gb->memory.boot_rom_finished = true;
 
-    gb->cpu.reg = {};
+    memset(&(gb->cpu.reg), 0, sizeof(gb->cpu.reg));
+    // gb->cpu.reg = {};
     gb->cpu.reg.a = 0x01;
     gb->cpu.reg.c = 0x13;
     gb->cpu.reg.e = 0xD8;
@@ -32,12 +32,13 @@ void gb_init(Gameboy *gb)
     gb->cpu.reg.flags.c = 1;
     gb->cpu.reg.flags.h = 1;
     gb->cpu.reg.flags.z = 1;
+    gb->cpu.reg.ir = 0x00;
     gb->cpu.instructions = instructions;
     gb->cpu.instruction.microop_index = 0;
-    gb->cpu.ime = IMEState::Disabled;
+    gb->cpu.ime = Disabled;
 
     gb->cpu.fetching = false;
-    gb->cpu.io_state = IOState::Idle;
+    gb->cpu.io_state = Idle;
 
     gb->memory.div_counter = 0xABCC;
     gb->memory.io_registers[IO_TAC] = 0xF8;
