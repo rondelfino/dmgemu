@@ -1,12 +1,14 @@
 #pragma once
 
 #include "memory.h"
+#include "ppu.h"
 #include "sm83.h"
 
 typedef struct
 {
     SM83 cpu;
     Memory memory;
+    PPU ppu;
     // APU apu;
 
     u64 cycles_elapsed;
